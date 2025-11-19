@@ -1,0 +1,17 @@
+# Core Django
+Django==5.2.8
+djangorestframework==3.16.1
+django-cors-headers==4.9.0
+
+# Environment
+python-dotenv==1.0.0
+
+# AI - Google Gemini (minimal)
+google-generativeai==0.8.5
+
+# CrewAI (minimal for investment advisory)
+crewai==0.86.0
+langchain-google-genai==2.0.5
+
+# HTTP requests
+requests==2.32.5
