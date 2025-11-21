@@ -1,4 +1,5 @@
 from django.urls import path
+from .views import save_inquiry
 from . import views
 
 urlpatterns = [
@@ -7,4 +8,6 @@ urlpatterns = [
     path('regenerate-allocation/', views.regenerate_allocation, name='regenerate_allocation'),
     # path('chat/', views.chat_with_ai, name='chat_with_ai'),
     # path('chat/clear/', views.clear_chat, name='clear_chat'),
+    # backend/api/urls.py
+    path('dubai-inquiry/', save_inquiry),
 ]
