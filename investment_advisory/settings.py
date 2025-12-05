@@ -2,25 +2,47 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
+# -------------------------------------------------------
+# BASE SETTINGS
+# -------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent.parent
+
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-default-key')
 DEBUG = True
-ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1'
+]
+
+# -------------------------------------------------------
+# API KEYS (Merged)
+# -------------------------------------------------------
 SANDBOX_API_KEY = os.getenv("SANDBOX_API_KEY")
 SANDBOX_API_SECRET = os.getenv("SANDBOX_API_SECRET")
 
-# --- Get API Key ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY  # make available globally
-
+os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 
 if not GEMINI_API_KEY:
     print("Warning: GEMINI_API_KEY not found in .env file.")
 
+# -------------------------------------------------------
+# EMAIL CONFIG 
+# -------------------------------------------------------
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
 
+# -------------------------------------------------------
+# INSTALLED APPS (Merged)
+# -------------------------------------------------------
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -28,64 +50,64 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+
+    # Third party
     'rest_framework',
     'corsheaders',
+
+    # Your apps
     'api',
-    'chat_api',
-    'gst_recon',
+    
+    # 'gst_recon',
     'gstr1vs3b',
+    'bot',  # from teammate’s settings
 ]
 
+# -------------------------------------------------------
+# MIDDLEWARE (Correct order for cors)
+# -------------------------------------------------------
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
+
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
+
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
+
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# -------------------------------------------------------
+# CORS SETTINGS (Merged)
+# -------------------------------------------------------
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 
 CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
 ]
 
-CORS_ALLOW_METHODS = [
-    'DELETE',
-    'GET',
-    'OPTIONS',
-    'PATCH',
-    'POST',
-    'PUT',
-]
-
-CORS_ALLOW_HEADERS = [
-    'accept',
-    'accept-encoding',
-    'authorization',
-    'content-type',
-    'dnt',
-    'origin',
-    'user-agent',
-    'x-csrftoken',
-    'x-requested-with',
-]
 
 SESSION_COOKIE_SAMESITE = None
 SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SAMESITE = None
 CSRF_COOKIE_SECURE = False
 
+# -------------------------------------------------------
+# URL + WSGI
+# -------------------------------------------------------
 ROOT_URLCONF = 'investment_advisory.urls'
 WSGI_APPLICATION = 'investment_advisory.wsgi.application'
 
+# -------------------------------------------------------
+# DATABASE (Both were SQLite, so merged)
+# -------------------------------------------------------
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
@@ -93,15 +115,9 @@ DATABASES = {
     }
 }
 
-LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'Asia/Kolkata'
-USE_I18N = True
-USE_TZ = True
-STATIC_URL = 'static/'
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
+# -------------------------------------------------------
+# REST FRAMEWORK (your version)
+# -------------------------------------------------------
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
@@ -110,10 +126,13 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [],
 }
 
+# -------------------------------------------------------
+# TEMPLATES (Merged)
+# -------------------------------------------------------
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [],  # add frontend dir if needed
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -125,3 +144,20 @@ TEMPLATES = [
         },
     },
 ]
+
+# -------------------------------------------------------
+# INTERNATIONALIZATION (your timezone chosen)
+# -------------------------------------------------------
+LANGUAGE_CODE = 'en-us'
+TIME_ZONE = 'Asia/Kolkata'
+USE_I18N = True
+USE_TZ = True
+
+# -------------------------------------------------------
+# STATIC & MEDIA
+# -------------------------------------------------------
+STATIC_URL = 'static/'
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
