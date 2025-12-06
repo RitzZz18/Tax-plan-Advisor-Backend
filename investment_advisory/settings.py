@@ -50,17 +50,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-
-    # Third party
     'rest_framework',
     'corsheaders',
-
-    # Your apps
     'api',
-    
-    # 'gst_recon',
     'gstr1vs3b',
-    'bot',  # from teammate’s settings
+    'bot',
+    'chat_api'
 ]
 
 # -------------------------------------------------------
@@ -109,12 +104,15 @@ WSGI_APPLICATION = 'investment_advisory.wsgi.application'
 # DATABASE (Both were SQLite, so merged)
 # -------------------------------------------------------
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("SUPABASE_DB_NAME"),
+        "USER": os.getenv("SUPABASE_DB_USER"),
+        "PASSWORD": os.getenv("SUPABASE_DB_PASSWORD"),
+        "HOST": os.getenv("SUPABASE_DB_HOST"),
+        "PORT": os.getenv("SUPABASE_DB_PORT", "5432"),
     }
 }
-
 # -------------------------------------------------------
 # REST FRAMEWORK (your version)
 # -------------------------------------------------------
