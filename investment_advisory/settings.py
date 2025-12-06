@@ -15,7 +15,8 @@ DEBUG = True
 
 ALLOWED_HOSTS = [
     'localhost',
-    '127.0.0.1'
+    '127.0.0.1',
+    'tax-plan-advisor-backend.onrender.com'
 ]
 
 # -------------------------------------------------------
