@@ -11,11 +11,12 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-default-key')
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = [
     'localhost',
-    '127.0.0.1'
+    '127.0.0.1',
+    '.onrender.com'
 ]
 
 # -------------------------------------------------------
@@ -88,6 +89,9 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://*.onrender.com",
+]
 
 SESSION_COOKIE_SAMESITE = None
 SESSION_COOKIE_SECURE = False
@@ -111,6 +115,7 @@ DATABASES = {
         "PASSWORD": os.getenv("SUPABASE_DB_PASSWORD"),
         "HOST": os.getenv("SUPABASE_DB_HOST"),
         "PORT": os.getenv("SUPABASE_DB_PORT", "5432"),
+        "OPTIONS": {"sslmode": "require"},
     }
 }
 # -------------------------------------------------------
@@ -154,7 +159,8 @@ USE_TZ = True
 # -------------------------------------------------------
 # STATIC & MEDIA
 # -------------------------------------------------------
-STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_URL = '/static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
