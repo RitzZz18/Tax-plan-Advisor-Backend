@@ -6,13 +6,14 @@ from rest_framework import status
 from django.conf import settings
 from django.http import HttpResponse
 import requests
-from datetime import datetime
-from .models import ReconciliationReport
+from datetime import datetime, timedelta
+from .models import ReconciliationReport, GSTSession
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import calendar
 from io import BytesIO
+import uuid
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -82,11 +83,18 @@ def generate_otp(request):
                 'use_test_mode': True
             }, status=400)
         
-        request.session['username'] = username
-        request.session['gstin'] = gstin
-        request.session['access_token'] = access_token
+        gst_session = GSTSession.objects.create(
+            username=username,
+            gstin=gstin,
+            access_token=access_token
+        )
         
-        return Response({'message': 'OTP sent successfully'})
+        GSTSession.objects.filter(created_at__lt=datetime.now() - timedelta(hours=24)).delete()
+        
+        return Response({
+            'message': 'OTP sent successfully',
+            'session_id': str(gst_session.session_id)
+        })
     except Exception as e:
         return Response({'error': f'Error: {str(e)}'}, status=500)
 
@@ -98,11 +106,16 @@ def verify_otp(request):
     if not otp or not otp.strip():
         return Response({'error': 'OTP cannot be empty'}, status=400)
     
-    username = request.session.get('username')
-    gstin = request.session.get('gstin')
-    access_token = request.session.get('access_token')
+    session_id = request.data.get('session_id')
+    if not session_id:
+        return Response({'error': 'Session ID required'}, status=400)
     
-    if not all([username, gstin, access_token]):
+    try:
+        gst_session = GSTSession.objects.get(session_id=session_id)
+        username = gst_session.username
+        gstin = gst_session.gstin
+        access_token = gst_session.access_token
+    except GSTSession.DoesNotExist:
         return Response({'error': 'Session expired. Please generate OTP again'}, status=400)
     
     verify_response = requests.post(
@@ -124,7 +137,8 @@ def verify_otp(request):
     if data.get("status_cd") == "0" or not taxpayer_token:
         return Response({'error': data.get("message", "OTP verification failed")}, status=400)
     
-    request.session['taxpayer_token'] = taxpayer_token
+    gst_session.taxpayer_token = taxpayer_token
+    gst_session.save(update_fields=['taxpayer_token', 'updated_at'])
     
     return Response({'message': 'OTP verified successfully'})
 
@@ -136,9 +150,17 @@ def reconcile(request):
     if not fy_year or not str(fy_year).isdigit():
         return Response({'error': 'Invalid year'}, status=400)
     
-    taxpayer_token = request.session.get('taxpayer_token')
-    if not taxpayer_token:
-        return Response({'error': 'Please verify OTP first'}, status=400)
+    session_id = request.data.get('session_id')
+    if not session_id:
+        return Response({'error': 'Session ID required'}, status=400)
+    
+    try:
+        gst_session = GSTSession.objects.get(session_id=session_id)
+        taxpayer_token = gst_session.taxpayer_token
+        if not taxpayer_token:
+            return Response({'error': 'Please verify OTP first'}, status=400)
+    except GSTSession.DoesNotExist:
+        return Response({'error': 'Session expired. Please generate OTP again'}, status=400)
     
     start_year = int(fy_year)
     end_year = start_year + 1
@@ -158,12 +180,9 @@ def reconcile(request):
             result['month'] = month
             results.append(result)
     
-    username = request.session.get('username')
-    gstin = request.session.get('gstin')
-    
     ReconciliationReport.objects.create(
-        username=username,
-        gstin=gstin,
+        username=gst_session.username,
+        gstin=gst_session.gstin,
         fy_year=start_year,
         report_data=results
     )

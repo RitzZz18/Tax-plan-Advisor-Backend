@@ -16,8 +16,9 @@ DEBUG = True
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
-    'tax-plan-advisor-backend.onrender.com'
-    '.onrender.com'
+    'tax-plan-advisor-backend.onrender.com',
+    '.onrender.com',
+
 ]
 
 # -------------------------------------------------------
@@ -88,13 +89,11 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://taxplanadvisor.co",
+    "https://www.taxplanadvisor.co",
 ]
 
-
-SESSION_COOKIE_SAMESITE = None
-SESSION_COOKIE_SECURE = False
-CSRF_COOKIE_SAMESITE = None
-CSRF_COOKIE_SECURE = False
+CSRF_TRUSTED_ORIGINS = ['https://taxplanadvisor.co', 'https://api.taxplanadvisor.co']
 
 # -------------------------------------------------------
 # URL + WSGI
