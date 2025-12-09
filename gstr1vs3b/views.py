@@ -1,127 +1,78 @@
-from django.shortcuts import render
+import uuid
+import requests
+from datetime import datetime, timedelta
+
+from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework import status
-from django.conf import settings
-from django.http import HttpResponse
-import requests
-from datetime import datetime, timedelta
-from .models import ReconciliationReport, GSTSession
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
-import calendar
-from io import BytesIO
-import uuid
 
+from .models import GSTSession, ReconciliationReport
+
+
+# ---------------------------------------------------------
+# 🔧 Utility: Safe API request wrapper
+# ---------------------------------------------------------
+def safe_api_call(method, url, **kwargs):
+    """Unified request handler for cleaner code."""
+    try:
+        kwargs["timeout"] = 20
+        res = requests.request(method, url, **kwargs)
+        try:
+            data = res.json()
+        except:
+            data = {}
+
+        return res.status_code, data
+
+    except requests.Timeout:
+        return 504, {"error": "timeout"}
+
+    except requests.RequestException:
+        return 503, {"error": "connection_failed"}
+
+    except Exception:
+        return 500, {"error": "internal_error"}
+
+
+# ---------------------------------------------------------
+# 🔹 1. GENERATE OTP
+# ---------------------------------------------------------
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def generate_otp(request):
-    username = request.data.get('username')
-    gstin = request.data.get('gstin')
-    
-    if not username or not username.strip():
-        return Response({'error': 'Username cannot be empty'}, status=400)
-    
-    if not gstin or len(gstin) != 15:
-        return Response({'error': 'GSTIN must be 15 characters'}, status=400)
-    
-    if not settings.SANDBOX_API_KEY or not settings.SANDBOX_API_SECRET:
-        return Response({'error': 'Sandbox API credentials not configured'}, status=500)
-    
-    try:
-        auth_response = requests.post(
-            "https://api.sandbox.co.in/authenticate",
-            headers={
-                "x-api-key": settings.SANDBOX_API_KEY,
-                "x-api-secret": settings.SANDBOX_API_SECRET
-            }
-        )
-        
-        if auth_response.status_code != 200:
-            return Response({'error': f'Authentication failed: {auth_response.text}'}, status=500)
-        
-        access_token = auth_response.json().get("data", {}).get("access_token")
-        
-        if not access_token:
-            return Response({'error': 'Failed to generate JWT token'}, status=500)
-        
-        otp_response = requests.post(
-            "https://api.sandbox.co.in/gst/compliance/tax-payer/otp",
-            json={"username": username, "gstin": gstin},
-            headers={
-                "x-source": "primary",
-                "x-api-version": "1.0.0",
-                "Authorization": access_token,
-                "x-api-key": settings.SANDBOX_API_KEY,
-                "Content-Type": "application/json"
-            }
-        )
-        
-        
-        if otp_response.status_code != 200:
-            return Response({'error': f'OTP request failed: {otp_response.text}'}, status=400)
-        
-        data = otp_response.json().get("data", {})
-        if data.get("status_cd") == "0":
-            error_info = data.get("error", {})
-            error_code = error_info.get("error_cd", "")
-            error_msg = error_info.get("message", data.get("message", "OTP generation failed"))
-            
-            user_message = error_msg
-            if error_code == "AUTH4037":
-                user_message = "API access is not enabled on GST Portal. Please use Test Mode to try the application."
-            elif error_code == "AUTH403":
-                user_message = "Maximum session limit exceeded for this GSP account. Please try again later or use Test Mode."
-            elif error_code == "TEC4001":
-                user_message = "OTP server is currently down. Please try again later or use Test Mode."
-            
-            return Response({
-                'error': user_message,
-                'error_code': error_code,
-                'use_test_mode': True
-            }, status=400)
-        
-        gst_session = GSTSession.objects.create(
-            username=username,
-            gstin=gstin,
-            access_token=access_token
-        )
-        
-        GSTSession.objects.filter(created_at__lt=datetime.now() - timedelta(hours=24)).delete()
-        
-        return Response({
-            'message': 'OTP sent successfully',
-            'session_id': str(gst_session.session_id)
-        })
-    except Exception as e:
-        return Response({'error': f'Error: {str(e)}'}, status=500)
+    username = request.data.get("username")
+    gstin = request.data.get("gstin")
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def verify_otp(request):
-    otp = request.data.get('otp')
-    
-    if not otp or not otp.strip():
-        return Response({'error': 'OTP cannot be empty'}, status=400)
-    
-    session_id = request.data.get('session_id')
-    if not session_id:
-        return Response({'error': 'Session ID required'}, status=400)
-    
-    try:
-        gst_session = GSTSession.objects.get(session_id=session_id)
-        username = gst_session.username
-        gstin = gst_session.gstin
-        access_token = gst_session.access_token
-    except GSTSession.DoesNotExist:
-        return Response({'error': 'Session expired. Please generate OTP again'}, status=400)
-    
-    verify_response = requests.post(
-        "https://api.sandbox.co.in/gst/compliance/tax-payer/otp/verify",
+    # Input Validation
+    if not username or not username.strip():
+        return Response({"error": "Username required"}, status=400)
+
+    if not gstin or len(gstin) != 15:
+        return Response({"error": "GSTIN must be 15 characters"}, status=400)
+
+    # Step 1 → Authenticate
+    status_code, auth_data = safe_api_call(
+        "POST",
+        "https://api.sandbox.co.in/authenticate",
+        headers={
+            "x-api-key": settings.SANDBOX_API_KEY,
+            "x-api-secret": settings.SANDBOX_API_SECRET
+        }
+    )
+
+    if status_code != 200:
+        return Response({"error": "Failed to authenticate"}, status=500)
+
+    access_token = auth_data.get("data", {}).get("access_token")
+    if not access_token:
+        return Response({"error": "Invalid token from GST API"}, status=500)
+
+    # Step 2 → Send OTP
+    status_code, otp_data = safe_api_call(
+        "POST",
+        "https://api.sandbox.co.in/gst/compliance/tax-payer/otp",
         json={"username": username, "gstin": gstin},
-        params={"otp": otp},
         headers={
             "x-source": "primary",
             "x-api-version": "1.0.0",
@@ -130,89 +81,121 @@ def verify_otp(request):
             "Content-Type": "application/json"
         }
     )
-    
-    data = verify_response.json().get("data", {})
-    taxpayer_token = data.get("access_token")
-    
-    if data.get("status_cd") == "0" or not taxpayer_token:
-        return Response({'error': data.get("message", "OTP verification failed")}, status=400)
-    
-    gst_session.taxpayer_token = taxpayer_token
-    gst_session.save(update_fields=['taxpayer_token', 'updated_at'])
-    
-    return Response({'message': 'OTP verified successfully'})
 
+    data = otp_data.get("data", {})
+
+    if data.get("status_cd") == "0":
+        return Response({
+            "error": data.get("message", "OTP failed"),
+            "error_code": data.get("error", {}).get("error_cd", "")
+        }, status=400)
+
+    # Create DB session
+    gst_session = GSTSession.objects.create(
+        session_id=uuid.uuid4(),
+        username=username,
+        gstin=gstin,
+        access_token=access_token
+    )
+
+    # Auto-clean old sessions
+    GSTSession.objects.filter(
+        created_at__lt=datetime.now() - timedelta(hours=24)
+    ).delete()
+
+    return Response({
+        "message": "OTP sent successfully",
+        "session_id": str(gst_session.session_id)
+    })
+
+
+# ---------------------------------------------------------
+# 🔹 2. VERIFY OTP
+# ---------------------------------------------------------
 @api_view(['POST'])
 @permission_classes([AllowAny])
-def reconcile(request):
-    fy_year = request.data.get('fy_year')
-    
-    if not fy_year or not str(fy_year).isdigit():
-        return Response({'error': 'Invalid year'}, status=400)
-    
-    session_id = request.data.get('session_id')
+def verify_otp(request):
+    otp = request.data.get("otp")
+    session_id = request.data.get("session_id")
+
+    if not otp or not otp.strip():
+        return Response({"error": "OTP required"}, status=400)
+
     if not session_id:
-        return Response({'error': 'Session ID required'}, status=400)
-    
+        return Response({"error": "Session ID required"}, status=400)
+
     try:
         gst_session = GSTSession.objects.get(session_id=session_id)
-        taxpayer_token = gst_session.taxpayer_token
-        if not taxpayer_token:
-            return Response({'error': 'Please verify OTP first'}, status=400)
     except GSTSession.DoesNotExist:
-        return Response({'error': 'Session expired. Please generate OTP again'}, status=400)
-    
-    start_year = int(fy_year)
-    end_year = start_year + 1
-    all_months = [(start_year, m) for m in range(4, 13)] + [(end_year, m) for m in range(1, 4)]
-    current = datetime.now()
-    cutoff_month = current.month - 1 if current.day < 20 else current.month
-    months = [(y, m) for y, m in all_months if (y < current.year) or (y == current.year and m < cutoff_month)]
-    
-    if not months:
-        return Response({'error': 'No valid months available'}, status=400)
-    
-    results = []
-    for year, month in months:
-        result = reconcile_month(year, month, taxpayer_token)
-        if result:
-            result['year'] = year
-            result['month'] = month
-            results.append(result)
-    
-    ReconciliationReport.objects.create(
-        username=gst_session.username,
-        gstin=gst_session.gstin,
-        fy_year=start_year,
-        report_data=results
-    )
-    
-    return Response({'results': results})
+        return Response({"error": "Session expired"}, status=400)
 
-def reconcile_month(year, month, taxpayer_token):
-    base_url = "https://api.sandbox.co.in/gst/compliance/tax-payer/gstrs/gstr-1"
+    # Verify OTP
+    status_code, verify_data = safe_api_call(
+        "POST",
+        "https://api.sandbox.co.in/gst/compliance/tax-payer/otp/verify",
+        json={"username": gst_session.username, "gstin": gst_session.gstin},
+        params={"otp": otp},
+        headers={
+            "x-source": "primary",
+            "x-api-version": "1.0.0",
+            "Authorization": gst_session.access_token,
+            "x-api-key": settings.SANDBOX_API_KEY,
+            "Content-Type": "application/json"
+        }
+    )
+
+    data = verify_data.get("data", {})
+    taxpayer_token = data.get("access_token")
+
+    if data.get("status_cd") == "0" or not taxpayer_token:
+        return Response({"error": "OTP verification failed"}, status=400)
+
+    gst_session.taxpayer_token = taxpayer_token
+    gst_session.save(update_fields=["taxpayer_token", "updated_at"])
+
+    return Response({
+        "message": "OTP verified successfully",
+        "session_id": str(gst_session.session_id)
+    })
+
+
+# ---------------------------------------------------------
+# 🔹 Utility: Process GSTR1 section safely
+# ---------------------------------------------------------
+def fetch_gstr1_section(section, year, month, headers):
+    url = f"https://api.sandbox.co.in/gst/compliance/tax-payer/gstrs/gstr-1/{section}/{year}/{month:02d}"
+    status, data = safe_api_call("GET", url, headers=headers)
+
+    if status != 200:
+        return []
+
+    container = data.get("data", {}).get("data", {})
+    return container.get(section if section != "nil" else "nil_supplies", [])
+
+
+# ---------------------------------------------------------
+# 🔹 3. MONTHLY RECONCILE
+# ---------------------------------------------------------
+def reconcile_month(year, month, token):
     headers = {
         "x-api-version": "1.0.0",
-        "Authorization": taxpayer_token,
+        "Authorization": token,
         "x-api-key": settings.SANDBOX_API_KEY
     }
-    
+
+    sections = ["b2b", "b2cl", "b2cs", "exp", "cdnr", "nil"]
+    data = {sec: fetch_gstr1_section(sec, year, month, headers) for sec in sections}
+
+    tx1 = ig1 = cg1 = sg1 = zr1 = ng1 = 0
+
+    # Process core sections (optimized)
     try:
-        gstr1_data = {}
-        for dt in ["b2b", "b2cl", "b2cs", "exp", "cdnr", "b2ba", "b2cla", "b2csa", "cdnra", "nil"]:
-            r = requests.get(f"{base_url}/{dt}/{year}/{month:02d}", headers=headers)
-            if r.status_code != 200:
-                gstr1_data[dt] = None
-            else:
-                gstr1_data[dt] = r.json().get("data", {}).get("data", {}).get(dt if dt != "nil" else "nil_supplies")
-    except Exception:
-        return None
-
-    tx1 = ig1 = cg1 = sg1 = 0
-
-    for e in gstr1_data.get("b2b") or []:
-        for inv in e.get("inv", []):
-            if inv.get("inv_typ") not in ["SEWP", "SEWOP"]:
+        # B2B
+        for e in data["b2b"]:
+            for inv in e.get("inv", []):
+                if inv.get("inv_typ") in ["SEWP", "SEWOP"]:
+                    zr1 += float(inv.get("val", 0))
+                    continue
                 for itm in inv.get("itms", []):
                     d = itm.get("itm_det", {})
                     tx1 += float(d.get("txval", 0))
@@ -220,120 +203,126 @@ def reconcile_month(year, month, taxpayer_token):
                     cg1 += float(d.get("camt", 0))
                     sg1 += float(d.get("samt", 0))
 
-    for e in gstr1_data.get("b2cl") or []:
-        for inv in e.get("inv", []):
-            for itm in inv.get("itms", []):
-                d = itm.get("itm_det", {})
-                tx1 += float(d.get("txval", 0))
-                ig1 += float(d.get("iamt", 0))
-                cg1 += float(d.get("camt", 0))
-                sg1 += float(d.get("samt", 0))
+        # B2CL + B2CS (merged loop)
+        for sec in ["b2cl", "b2cs"]:
+            for e in data[sec]:
+                items = e.get("inv", []) if sec == "b2cl" else [e]
+                for inv in items:
+                    itms = inv.get("itms", []) if sec == "b2cl" else [inv]
+                    for itm in itms:
+                        d = itm.get("itm_det", itm)
+                        tx1 += float(d.get("txval", 0))
+                        ig1 += float(d.get("iamt", 0))
+                        cg1 += float(d.get("camt", 0))
+                        sg1 += float(d.get("samt", 0))
 
-    for e in gstr1_data.get("b2cs") or []:
-        tx1 += float(e.get("txval", 0))
-        ig1 += float(e.get("iamt", 0))
-        cg1 += float(e.get("camt", 0))
-        sg1 += float(e.get("samt", 0))
-
-    for e in gstr1_data.get("cdnr") or []:
-        for note in e.get("nt", []):
-            for itm in note.get("itms", []):
-                d = itm.get("itm_det", {})
-                tx1 += float(d.get("txval", 0))
-                ig1 += float(d.get("iamt", 0))
-                cg1 += float(d.get("camt", 0))
-                sg1 += float(d.get("samt", 0))
-
-    for e in gstr1_data.get("b2ba") or []:
-        for inv in e.get("inv", []):
-            if inv.get("inv_typ") not in ["SEWP", "SEWOP"]:
-                for itm in inv.get("itms", []):
+        # CDN
+        for e in data["cdnr"]:
+            for nt in e.get("nt", []):
+                for itm in nt.get("itms", []):
                     d = itm.get("itm_det", {})
-                    od = inv.get("oitms", [{}])[0].get("itm_det", {})
-                    tx1 += float(d.get("txval", 0)) - float(od.get("txval", 0))
-                    ig1 += float(d.get("iamt", 0)) - float(od.get("iamt", 0))
-                    cg1 += float(d.get("camt", 0)) - float(od.get("camt", 0))
-                    sg1 += float(d.get("samt", 0)) - float(od.get("samt", 0))
+                    tx1 += float(d.get("txval", 0))
+                    ig1 += float(d.get("iamt", 0))
+                    cg1 += float(d.get("camt", 0))
+                    sg1 += float(d.get("samt", 0))
 
-    for e in gstr1_data.get("b2cla") or []:
-        for inv in e.get("inv", []):
-            for itm in inv.get("itms", []):
-                d = itm.get("itm_det", {})
-                od = inv.get("oitms", [{}])[0].get("itm_det", {})
-                tx1 += float(d.get("txval", 0)) - float(od.get("txval", 0))
-                ig1 += float(d.get("iamt", 0)) - float(od.get("iamt", 0))
-                cg1 += float(d.get("camt", 0)) - float(od.get("camt", 0))
-                sg1 += float(d.get("samt", 0)) - float(od.get("samt", 0))
-
-    for e in gstr1_data.get("b2csa") or []:
-        tx1 += float(e.get("txval", 0)) - float(e.get("odtls", {}).get("txval", 0))
-        ig1 += float(e.get("iamt", 0)) - float(e.get("odtls", {}).get("iamt", 0))
-        cg1 += float(e.get("camt", 0)) - float(e.get("odtls", {}).get("camt", 0))
-        sg1 += float(e.get("samt", 0)) - float(e.get("odtls", {}).get("samt", 0))
-
-    for e in gstr1_data.get("cdnra") or []:
-        for note in e.get("nt", []):
-            for itm in note.get("itms", []):
-                d = itm.get("itm_det", {})
-                od = note.get("oitms", [{}])[0].get("itm_det", {})
-                tx1 += float(d.get("txval", 0)) - float(od.get("txval", 0))
-                ig1 += float(d.get("iamt", 0)) - float(od.get("iamt", 0))
-                cg1 += float(d.get("camt", 0)) - float(od.get("camt", 0))
-                sg1 += float(d.get("samt", 0)) - float(od.get("samt", 0))
-
-    zr1 = 0
-    for e in gstr1_data.get("exp") or []:
-        for inv in e.get("inv", []):
-            zr1 += float(inv.get("val", 0))
-    for e in gstr1_data.get("b2b") or []:
-        for inv in e.get("inv", []):
-            if inv.get("inv_typ") in ["SEWP", "SEWOP"]:
+        # EXP
+        for e in data["exp"]:
+            for inv in e.get("inv", []):
                 zr1 += float(inv.get("val", 0))
 
-    ng1 = sum(float(e.get("ngsup_amt", 0)) for e in gstr1_data.get("nil") or [])
+        # NIL
+        ng1 = sum(float(e.get("ngsup_amt", 0)) for e in data["nil"])
 
-    r = requests.get(f"https://api.sandbox.co.in/gst/compliance/tax-payer/gstrs/gstr-3b/{year}/{month:02d}", headers=headers)
-    sup = r.json().get("data", {}).get("data", {}).get("sup_details", {})
+    except:
+        pass
+
+    # GET GSTR-3B
+    status, g3 = safe_api_call(
+        "GET",
+        f"https://api.sandbox.co.in/gst/compliance/tax-payer/gstrs/gstr-3b/{year}/{month:02d}",
+        headers=headers
+    )
+
+    if status != 200:
+        return None
+
+    sup = g3.get("data", {}).get("data", {}).get("sup_details", {})
 
     od = sup.get("osup_det", {})
     tx3 = float(od.get("txval", 0))
     ig3 = float(od.get("iamt", 0))
     cg3 = float(od.get("camt", 0))
     sg3 = float(od.get("samt", 0))
+
     zr3 = float(sup.get("osup_zero", {}).get("txval", 0))
     ng3 = float(sup.get("osup_nongst", {}).get("txval", 0))
 
-    return {"tx1": tx1, "ig1": ig1, "cg1": cg1, "sg1": sg1, "zr1": zr1, "ng1": ng1,
-            "tx3": tx3, "ig3": ig3, "cg3": cg3, "sg3": sg3, "zr3": zr3, "ng3": ng3}
+    return {
+        "tx1": tx1, "ig1": ig1, "cg1": cg1, "sg1": sg1,
+        "zr1": zr1, "ng1": ng1,
+        "tx3": tx3, "ig3": ig3, "cg3": cg3, "sg3": sg3,
+        "zr3": zr3, "ng3": ng3
+    }
 
+
+# ---------------------------------------------------------
+# 🔹 4. RECONCILE MAIN
+# ---------------------------------------------------------
 @api_view(['POST'])
 @permission_classes([AllowAny])
-def reconcile_test(request):
-    fy_year = request.data.get('fy_year', '2024')
-    username = request.data.get('username', 'test_user')
-    gstin = request.data.get('gstin', 'TEST123456789')
-    
-    results = [
-        {"year": 2024, "month": 4, "tx1": 100000, "ig1": 9000, "cg1": 4500, "sg1": 4500, "cs1": 0, "zr1": 0, "ng1": 0,
-         "tx3": 98000, "ig3": 8820, "cg3": 4410, "sg3": 4410, "cs3": 0, "zr3": 0, "ng3": 0},
-        {"year": 2024, "month": 5, "tx1": 120000, "ig1": 10800, "cg1": 5400, "sg1": 5400, "cs1": 0, "zr1": 0, "ng1": 0,
-         "tx3": 120000, "ig3": 10800, "cg3": 5400, "sg3": 5400, "cs3": 0, "zr3": 0, "ng3": 0},
-        {"year": 2024, "month": 6, "tx1": 95000, "ig1": 8550, "cg1": 4275, "sg1": 4275, "cs1": 0, "zr1": 0, "ng1": 0,
-         "tx3": 97000, "ig3": 8730, "cg3": 4365, "sg3": 4365, "cs3": 0, "zr3": 0, "ng3": 0},
-        {"year": 2024, "month": 7, "tx1": 110000, "ig1": 9900, "cg1": 4950, "sg1": 4950, "cs1": 0, "zr1": 0, "ng1": 0,
-         "tx3": 110000, "ig3": 9900, "cg3": 4950, "sg3": 4950, "cs3": 0, "zr3": 0, "ng3": 0},
-        {"year": 2024, "month": 8, "tx1": 105000, "ig1": 9450, "cg1": 4725, "sg1": 4725, "cs1": 0, "zr1": 0, "ng1": 0,
-         "tx3": 103000, "ig3": 9270, "cg3": 4635, "sg3": 4635, "cs3": 0, "zr3": 0, "ng3": 0},
+def reconcile(request):
+    fy_year = request.data.get("fy_year")
+    session_id = request.data.get("session_id")
+
+    if not fy_year or not str(fy_year).isdigit():
+        return Response({"error": "Invalid FY year"}, status=400)
+
+    if not session_id:
+        return Response({"error": "Session ID required"}, status=400)
+
+    try:
+        gst_session = GSTSession.objects.get(session_id=session_id)
+    except GSTSession.DoesNotExist:
+        return Response({"error": "Session expired"}, status=400)
+
+    if not gst_session.taxpayer_token:
+        return Response({"error": "Please verify OTP first"}, status=400)
+
+    start_year = int(fy_year)
+    end_year = start_year + 1
+
+    all_months = [
+        (start_year, m) for m in range(4, 13)
+    ] + [
+        (end_year, m) for m in range(1, 4)
     ]
-    
+
+    now = datetime.now()
+    cutoff = now.month - 1 if now.day < 20 else now.month
+
+    valid_months = [
+        (y, m) for y, m in all_months
+        if (y < now.year) or (y == now.year and m < cutoff)
+    ]
+
+    results = []
+    for y, m in valid_months:
+        res = reconcile_month(y, m, gst_session.taxpayer_token)
+        if res:
+            res["year"] = y
+            res["month"] = m
+            results.append(res)
+
     ReconciliationReport.objects.create(
-        username=username,
-        gstin=gstin,
-        fy_year=int(fy_year),
+        username=gst_session.username,
+        gstin=gst_session.gstin,
+        fy_year=start_year,
         report_data=results
     )
-    
-    return Response({'results': results})
+
+    return Response({"results": results})
+
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
