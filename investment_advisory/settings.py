@@ -7,7 +7,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-default-key')
 DEBUG = True
-ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'api.taxplanadvisor.co', 'taxplanadvisor.co', 'www.taxplanadvisor.co']
 
 SANDBOX_API_KEY = os.getenv("SANDBOX_API_KEY")
 SANDBOX_API_SECRET = os.getenv("SANDBOX_API_SECRET")
@@ -55,6 +55,10 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:8080",
     "http://127.0.0.1:8080",
+    "https://taxplanadvisor.co",
+    "https://www.taxplanadvisor.co",
+    "http://taxplanadvisor.co",
+    "http://www.taxplanadvisor.co",
 ]
 
 CORS_ALLOW_METHODS = [
