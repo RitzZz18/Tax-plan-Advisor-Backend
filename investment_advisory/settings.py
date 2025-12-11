@@ -17,6 +17,9 @@ ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
     '3.6.127.24',
+    'tax-plan-advisor-backend.onrender.com',
+    '.onrender.com',
+
 ]
 
 # -------------------------------------------------------
@@ -51,17 +54,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-
-    # Third party
     'rest_framework',
     'corsheaders',
-
-    # Your apps
     'api',
-    
-    # 'gst_recon',
     'gstr1vs3b',
-    'bot',  # from teammate’s settings
+    'bot',
+    'chat_api'
 ]
 
 # -------------------------------------------------------
@@ -92,13 +90,11 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://taxplanadvisor.co",
+    "https://www.taxplanadvisor.co",
 ]
 
-
-SESSION_COOKIE_SAMESITE = None
-SESSION_COOKIE_SECURE = False
-CSRF_COOKIE_SAMESITE = None
-CSRF_COOKIE_SECURE = False
+CSRF_TRUSTED_ORIGINS = ['https://taxplanadvisor.co', 'https://api.taxplanadvisor.co']
 
 # -------------------------------------------------------
 # URL + WSGI
@@ -116,20 +112,15 @@ WSGI_APPLICATION = 'investment_advisory.wsgi.application'
 #     }
 # }
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME'),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': os.getenv('DB_HOST'),
-        'PORT': os.getenv('DB_PORT'),
-        # 'OPTIONS': {
-        #     'sslmode': os.getenv('DB_SSLMODE', 'require'),
-        #     'channel_binding': 'require',
-        # },
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("SUPABASE_DB_NAME"),
+        "USER": os.getenv("SUPABASE_DB_USER"),
+        "PASSWORD": os.getenv("SUPABASE_DB_PASSWORD"),
+        "HOST": os.getenv("SUPABASE_DB_HOST"),
+        "PORT": os.getenv("SUPABASE_DB_PORT", "5432"),
     }
 }
-
 # -------------------------------------------------------
 # REST FRAMEWORK (your version)
 # -------------------------------------------------------
