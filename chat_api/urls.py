@@ -1,8 +1,9 @@
 from django.urls import path
-from .views import ChatbotView,ClearChatView
-urlpatterns = [
-    # This creates an endpoint at /api/chat/
-    path('chat/', ChatbotView.as_view(), name='chat'),
-    path("chat/clear/", ClearChatView.as_view()),
+from .views import ChatbotView, ClearChatView, SaveUserContactView, GetUserContactsView
 
+urlpatterns = [
+    path('chat/', ChatbotView.as_view(), name='chat'),
+    path('chat/clear/', ClearChatView.as_view()),
+    path('save-contact/', SaveUserContactView.as_view()),
+    path('contacts/', GetUserContactsView.as_view()),
 ]

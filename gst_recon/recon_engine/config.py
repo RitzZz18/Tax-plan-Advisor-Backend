@@ -1,0 +1,5 @@
+# Default thresholds and config
+PER_INVOICE_TOLERANCE = 1.0  # INR
+MONTH_SUMMARY_TOLERANCE = 5.0
+FUZZY_INVOICE_LEV_THRESHOLD = 2  # Levenshtein
+DATE_WINDOW_DAYS = 7

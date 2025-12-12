@@ -1,23 +1,24 @@
 from crewai import Agent
-from langchain_google_genai import ChatGoogleGenerativeAI
-from crewai_tools import SerperDevTool
 import os
 
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=os.getenv('GEMINI_API_KEY'))
-search_tool = SerperDevTool(api_key=os.getenv('SERPER_API_KEY'))
+os.environ["GEMINI_API_KEY"] = os.getenv('GEMINI_API_KEY')
+
+# Use string format that CrewAI recognizes
+llm_config = {
+    "model": "gemini/gemini-1.5-flash",
+    "api_key": os.getenv('GEMINI_API_KEY')
+}
 
 market_research_agent = Agent(
-    role='Real-Time Market Research Analyst',
-    goal='Search and analyze LIVE market data to provide current investment insights based on today\'s market conditions',
-    backstory="""You are a market analyst who MUST use search tools to get real-time data. 
-    You NEVER provide generic responses. You always search for current market data first, 
-    then analyze the actual results. You specialize in Indian markets but always verify 
-    current conditions through web search before making any recommendations.""",
-    tools=[search_tool],
-    llm=llm,
+    role='Market Research Analyst',
+    goal='Analyze market trends and provide investment insights based on current market conditions',
+    backstory="""You are an experienced market analyst specializing in Indian markets. 
+    You provide detailed analysis of market conditions, sector performance, and investment opportunities.""",
+    tools=[],
+    llm="gemini/gemini-1.5-flash-002",
     verbose=True,
     allow_delegation=False,
-    max_iter=5,
+    max_iter=3,
     memory=True
 )
 
@@ -25,7 +26,7 @@ tax_calculator_agent = Agent(
     role='Tax Calculation Expert',
     goal='Calculate accurate tax liability based on Indian tax laws',
     backstory='Expert in Indian Income Tax Act with deep knowledge of tax slabs, deductions, and various income types',
-    llm=llm,
+    llm="gemini/gemini-1.5-flash-002",
     verbose=True,
     allow_delegation=False
 )
@@ -37,7 +38,7 @@ investment_strategist_agent = Agent(
     You never use generic allocations. You always base your recommendations on the latest market 
     research provided to you. You adapt strategies in real-time based on what's actually 
     happening in markets today, not historical patterns.""",
-    llm=llm,
+    llm="gemini/gemini-1.5-flash-002",
     verbose=True,
     allow_delegation=True,
     max_iter=3,
@@ -51,7 +52,7 @@ portfolio_optimizer_agent = Agent(
     You use the latest market research to optimize portfolios, ensuring they capitalize on 
     today's opportunities while maintaining appropriate risk levels. You always provide 
     specific fund names and current market-based rationale.""",
-    llm=llm,
+    llm="gemini/gemini-1.5-flash-002",
     verbose=True,
     allow_delegation=False,
     max_iter=2,

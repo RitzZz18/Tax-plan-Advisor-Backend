@@ -1,0 +1,43 @@
+=== GSTR-1 ===
+Found 3 tables on page 1
+
+Table 1: 2 rows x 2 cols
+
+Table 2: 5 rows x 4 cols
+
+Table 3: 24 rows x 8 cols
+Headers: ['Description', 'No. of\nrecords', 'Document\nType', 'Value (₹)', 'Integrated Tax (₹)']
+Row: ['4A - Taxable outward supplies made to registered persons (other than reverse charge supplies) including supplies made through e-commerce operator attracting TCS - B2B Regular', None, None, None, None]
+Row: ['Total', '103', 'Invoice', '1,33,26,401.40', '20,92,028.65']
+Row: ['', None, None, None, None]
+
+
+=== GSTR-3B ===
+Found 6 tables on page 1
+
+Table 1: 2 rows x 2 cols
+
+Table 2: 5 rows x 2 cols
+Headers: ['GSTIN of the supplier', '27AAMCR5575Q1ZA']
+Row: ['2(a). Legal name of the registered person', 'RAJESH INDIA MANUFACTURING PRIVATE LIMITED']
+Row: ['2(b). Trade name, if any', 'RAJESH INDIA MANUFACTURING PRIVATE LIMITED']
+
+Table 3: 6 rows x 6 cols
+Headers: ['Nature of Supplies', 'Total taxable\nvalue', 'D\nIntegrated\ntax', 'Central\ntax', 'State/UT\ntax']
+Row: ['(a) Outward taxable supplies (other than zero rated, nil rated and\nexempted)', '16618852.65', '2651018.92', '169638.85', '169638.85']
+Row: ['(b) Outward taxable supplies (zero rated)', '7321269.48', '0.00', '-', '-']
+
+Table 4: 3 rows x 6 cols
+Headers: ['Nature of Supplies', 'Total\ntaxable\nvalue', 'Integrated\ntax', 'Central\ntax', 'State/\nUT tax']
+Row: ['I\n(i) Taxable supplies on which electronic commerce operator pays tax u/s 9(5) [to\nbe furnished by electronic commerce operator]', '0.00', '0.00', '0.00', '0.00']
+Row: ['F\n(ii) Taxable supplies made by registered person through electronic commerce\noperator, on which electronic commerce operator is required to pay tax u/s 9(5)\n[to be furnished by registered person making supplies through electronic\ncommerce operator]', '0.00', '-', '-', '-']
+
+Table 5: 4 rows x 3 cols
+Headers: ['Nature of Supplies', 'Total taxable value', 'Integrated tax']
+Row: ['Supplies made to Unregistered Persons', '3285781.85', '591440.67']
+Row: ['Supplies made to Composition Taxable\nPersons', '0.00', '0.00']
+
+Table 6: 5 rows x 5 cols
+Headers: ['Details', 'Integrated tax', 'Central tax', 'State/UT tax', 'Cess']
+Row: ['A. ITC Available (whether in full or part)', '', '', '', '']
+Row: ['(1) Import of goods', '57595.00', '0.00', '0.00', '0.00']

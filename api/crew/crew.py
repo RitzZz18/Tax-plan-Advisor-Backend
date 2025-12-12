@@ -14,9 +14,9 @@ from .tasks import (
 import json
 
 def run_investment_advisory_crew(request_data):
-    print("🔍 Starting real-time market research...")
+    print("🔍 Starting AI investment analysis...")
     
-    # Step 1: Force Real-Time Market Research
+    # Step 1: Market Research (simplified)
     market_task = create_market_analysis_task(
         market_research_agent, 
         request_data['riskAppetite']
@@ -26,13 +26,13 @@ def run_investment_advisory_crew(request_data):
         agents=[market_research_agent],
         tasks=[market_task],
         process=Process.sequential,
-        verbose=True,
-        memory=True
+        verbose=False,
+        memory=False
     )
     
-    print(" Executing market research with live data...")
+    print("📊 Executing market research...")
     market_result = market_crew.kickoff()
-    print(f" Market research completed: {len(str(market_result))} characters of analysis")
+    print(f"✅ Market research completed")
     
     # Step 2: Tax Calculation
     tax_task = create_tax_calculation_task(
@@ -44,7 +44,7 @@ def run_investment_advisory_crew(request_data):
         agents=[tax_calculator_agent],
         tasks=[tax_task],
         process=Process.sequential,
-        verbose=True
+        verbose=False
     )
     
     tax_result = tax_crew.kickoff()
@@ -101,8 +101,8 @@ def run_investment_advisory_crew(request_data):
         agents=[investment_strategist_agent, portfolio_optimizer_agent],
         tasks=[strategy_task, optimization_task],
         process=Process.sequential,
-        verbose=True,
-        memory=True
+        verbose=False,
+        memory=False
     )
     
     print("🎯 Creating market-driven investment strategy...")

@@ -15,3 +15,14 @@ langchain-google-genai==2.0.5
 
 # HTTP requests
 requests==2.32.5
+
+pandas
+numpy
+openpyxl
+pdfplumber
+camelot-py[cv]    # requires Java and opencv dependencies on host
+rapidfuzz
+celery
+redis
+uvicorn
+gunicorn
