@@ -58,7 +58,8 @@ INSTALLED_APPS = [
     'api',
     'gstr1vs3b',
     'bot',
-    'chat_api'
+    'chat_api',
+    'gstr3bvsbooks',
 ]
 
 # -------------------------------------------------------
@@ -86,6 +87,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 
 CORS_ALLOWED_ORIGINS = [
+    "http://localhost:8080",
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -93,7 +95,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://www.taxplanadvisor.co",
 ]
 
-CSRF_TRUSTED_ORIGINS = ['https://taxplanadvisor.co', 'https://api.taxplanadvisor.co']
+CSRF_TRUSTED_ORIGINS = ['https://taxplanadvisor.co', 'https://api.taxplanadvisor.co', 'http://localhost:8080']
 
 # -------------------------------------------------------
 # URL + WSGI

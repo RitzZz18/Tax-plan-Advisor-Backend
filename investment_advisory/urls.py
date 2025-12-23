@@ -8,6 +8,7 @@ urlpatterns = [
     # path('api/', include('gst_recon.urls')),
     path('api/', include('chat_api.urls')),
     path('api/gstr/', include('gstr1vs3b.urls')),
+    path('api/gstr3b/', include('gstr3bvsbooks.urls')),
     path('api/bot/', include('bot.urls')),
     path('api/', include('reconciliation.urls')),
 ]
