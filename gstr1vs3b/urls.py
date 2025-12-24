@@ -6,4 +6,5 @@ urlpatterns = [
     path('verify-otp/', views.verify_otp),
     path('reconcile/', views.reconcile),
     path('download-excel/', views.download_excel),
+    path('download-3b-excel/', views.download_3b_excel),
 ]

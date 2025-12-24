@@ -242,7 +242,7 @@ def fetch_auto_liability(year, month, headers):
     }
 
 # =====================================================
-# 2. FETCH FILED GSTR-3B (The User Data)
+# 2. FETCH FILED GSTR-3B (The User Data) + ITC Data
 # =====================================================
 def fetch_filed_3b(year, month, headers):
     url = f"https://api.sandbox.co.in/gst/compliance/tax-payer/gstrs/gstr-3b/{year}/{month:02d}"
@@ -251,14 +251,12 @@ def fetch_filed_3b(year, month, headers):
     if status != 200:
         return None
 
-    # Navigate to sup_details
-    # Path: data -> data -> sup_details
+    # Navigate to full 3B data
+    # Path: data -> data
     try:
-        sup_details = (
-            data.get("data", {})
-                .get("data", {})
-                .get("sup_details", {})
-        )
+        gstr3b_data = data.get("data", {}).get("data", {})
+        sup_details = gstr3b_data.get("sup_details", {})
+        itc_elg = gstr3b_data.get("itc_elg", {})
     except:
         return None
         
@@ -272,32 +270,159 @@ def fetch_filed_3b(year, month, headers):
     # RCM      -> isup_rev (Note: Key is distinct from Auto)
     # Non-GST  -> osup_nongst
 
+    # Extract ITC data from itc_elg (Table 4A)
+    # Table 4A - ITC Available breakdown:
+    # - ty = "IMPG" (Imports of Goods) - NOT in 2B
+    # - ty = "IMPS" (Imports of Services/RCM) - NOT in 2B
+    # - ty = "ISRC" (Inward supplies liable to RCM) - NOT in 2B
+    # - ty = "ISD" (Input from ISD) - May be in 2B
+    # - ty = "OTH" (All other ITC) - Should match 2B B2B
+    
+    itc_avl = itc_elg.get("itc_avl", [])
+    
+    # Total ITC claimed
+    itc_total_igst = 0
+    itc_total_cgst = 0
+    itc_total_sgst = 0
+    itc_total_cess = 0
+    
+    # ITC from RCM/Imports (NOT in 2B) - for adjustment
+    itc_rcm_igst = 0
+    itc_rcm_cgst = 0
+    itc_rcm_sgst = 0
+    itc_rcm_cess = 0
+    
+    for item in itc_avl:
+        igst = float(item.get("iamt", 0) or 0)
+        cgst = float(item.get("camt", 0) or 0)
+        sgst = float(item.get("samt", 0) or 0)
+        cess = float(item.get("csamt", 0) or 0)
+        
+        # Add to total
+        itc_total_igst += igst
+        itc_total_cgst += cgst
+        itc_total_sgst += sgst
+        itc_total_cess += cess
+        
+        # Check type - RCM/Imports are NOT in 2B
+        item_type = item.get("ty", "")
+        if item_type in ["IMPG", "IMPS", "ISRC"]:
+            itc_rcm_igst += igst
+            itc_rcm_cgst += cgst
+            itc_rcm_sgst += sgst
+            itc_rcm_cess += cess
+
     return {
-        # Standard
+        # Standard (Section 3.1.a)
         "tx": get_val(sup_details, "osup_det", "txval"),
         "igst": get_val(sup_details, "osup_det", "iamt"),
         "cgst": get_val(sup_details, "osup_det", "camt"),
         "sgst": get_val(sup_details, "osup_det", "samt"),
         
-        # Exports
+        # Exports (Section 3.1.b)
         "exp_tx": get_val(sup_details, "osup_zero", "txval"),
         "exp_igst": get_val(sup_details, "osup_zero", "iamt"),
 
-        # Nil
+        # Nil (Section 3.1.c)
         "nil_tx": get_val(sup_details, "osup_nil_exmp", "txval"),
 
-        # RCM
-        # "rcm_tx": get_val(sup_details, "isup_rev", "txval"),
-        # "rcm_igst": get_val(sup_details, "isup_rev", "iamt"),
-        # "rcm_cgst": get_val(sup_details, "isup_rev", "camt"),
-        # "rcm_sgst": get_val(sup_details, "isup_rev", "samt"),
-
-        # Non-GST
+        # Non-GST (Section 3.1.e)
         "nongst_tx": get_val(sup_details, "osup_nongst", "txval"),
+        
+        # Total ITC Claimed in 3B (Table 4A)
+        "itc_igst": itc_total_igst,
+        "itc_cgst": itc_total_cgst,
+        "itc_sgst": itc_total_sgst,
+        "itc_cess": itc_total_cess,
+        
+        # RCM/Imports ITC (NOT in 2B - for adjustment)
+        "itc_rcm_igst": itc_rcm_igst,
+        "itc_rcm_cgst": itc_rcm_cgst,
+        "itc_rcm_sgst": itc_rcm_sgst,
+        "itc_rcm_cess": itc_rcm_cess,
+    }
+
+
+# =====================================================
+# 3. FETCH GSTR-2B DATA (Purchase ITC from suppliers)
+# =====================================================
+def fetch_2b_data(year, month, headers):
+    """
+    Fetch GSTR-2B ITC data from Sandbox API.
+    GSTR-2B contains eligible ITC from supplier invoices.
+    
+    Actual API Response Structure:
+    data.data.data.itcsumm.itcavl.nonrevsup = {
+        "sgst": 9442.62,
+        "cgst": 9442.62,
+        "igst": 5885.22,
+        "cess": 0.0,
+        "b2b": { ... detailed values ... }
+    }
+    """
+    url = f"https://api.sandbox.co.in/gst/compliance/tax-payer/gstrs/gstr-2b/{year}/{month:02d}"
+    status, data = safe_api_call("GET", url, headers=headers)
+
+    if status != 200:
+        return None
+
+    # Navigate to ITC summary
+    # Path: data -> data -> data -> itcsumm -> itcavl
+    try:
+        # API returns: data.data.data.itcsumm (3 levels of 'data')
+        inner_data = data.get("data", {}).get("data", {}).get("data", {})
+        itcsumm = inner_data.get("itcsumm", {})
+        itcavl = itcsumm.get("itcavl", {})
+        
+        # Get ITC from non-reverse charge supplies (main B2B ITC)
+        nonrevsup = itcavl.get("nonrevsup", {})
+        
+        # Also get other sources if available
+        othersup = itcavl.get("othersup", {})
+        
+    except Exception as e:
+        print(f"Error parsing 2B data: {e}")
+        return None
+
+    # Helper to extract ITC values using correct keys: igst, cgst, sgst, cess
+    def get_itc_vals(section):
+        if not section:
+            return 0, 0, 0, 0
+        return (
+            float(section.get("igst", 0) or 0),
+            float(section.get("cgst", 0) or 0),
+            float(section.get("sgst", 0) or 0),
+            float(section.get("cess", 0) or 0)
+        )
+    
+    # Non-reverse charge supplies (main B2B ITC) - use top-level values
+    nr_igst, nr_cgst, nr_sgst, nr_cess = get_itc_vals(nonrevsup)
+    
+    # Other supplies (includes credit notes etc)
+    oth_igst, oth_cgst, oth_sgst, oth_cess = get_itc_vals(othersup)
+    
+    # Total ITC available as per 2B
+    total_igst = nr_igst + oth_igst
+    total_cgst = nr_cgst + oth_cgst
+    total_sgst = nr_sgst + oth_sgst
+    total_cess = nr_cess + oth_cess
+
+    return {
+        "itc_igst": total_igst,
+        "itc_cgst": total_cgst,
+        "itc_sgst": total_sgst,
+        "itc_cess": total_cess,
+        # Also include individual components for detailed view
+        "b2b_igst": nr_igst,
+        "b2b_cgst": nr_cgst,
+        "b2b_sgst": nr_sgst,
+        "oth_igst": oth_igst,
+        "oth_cgst": oth_cgst,
+        "oth_sgst": oth_sgst,
     }
 
 # =====================================================
-# 3. RECONCILE MONTH (The Logic)
+# 4. RECONCILE MONTH (The Logic) - Now includes 2B data
 # =====================================================
 def reconcile_month(year, month, token):
     headers = {
@@ -306,25 +431,83 @@ def reconcile_month(year, month, token):
         "x-api-version": "1.0.0"
     }
 
-    auto = fetch_auto_liability(year, month, headers)
-    filed = fetch_filed_3b(year, month, headers)
+    # Fetch all data sources
+    auto = fetch_auto_liability(year, month, headers)  # GSTR-1 auto-populated
+    filed = fetch_filed_3b(year, month, headers)       # Filed GSTR-3B (includes ITC)
+    gstr2b = fetch_2b_data(year, month, headers)       # GSTR-2B (purchase ITC)
 
     if not auto or not filed:
         return None
 
-    total_diff = (
+    # Sales reconciliation (GSTR-1 vs GSTR-3B)
+    sales_diff = (
         abs(auto["tx"] - filed["tx"]) +
         abs(auto["igst"] - filed["igst"]) +
         abs(auto["cgst"] - filed["cgst"]) +
         abs(auto["sgst"] - filed["sgst"]) +
         abs(auto["exp_tx"] - filed["exp_tx"]) +
-        # abs(auto["rcm_tx"] - filed["rcm_tx"]) +
         abs(auto["nongst_tx"] - filed["nongst_tx"])
     )
+
+    # Purchase ITC reconciliation (GSTR-2B vs GSTR-3B ITC claimed)
+    # Note: 3B ITC includes RCM/Imports which are NOT in 2B
+    # So we compare: 2B vs (3B - RCM) for "adjusted" match
+    if gstr2b:
+        # Gross difference (will mismatch due to RCM)
+        itc_diff_gross = (
+            abs(gstr2b["itc_igst"] - filed["itc_igst"]) +
+            abs(gstr2b["itc_cgst"] - filed["itc_cgst"]) +
+            abs(gstr2b["itc_sgst"] - filed["itc_sgst"]) +
+            abs(gstr2b["itc_cess"] - filed["itc_cess"])
+        )
+        
+        # Adjusted difference: 2B vs (3B - RCM)
+        # This should match if all B2B ITC is properly claimed
+        g3_adj_igst = filed["itc_igst"] - filed.get("itc_rcm_igst", 0)
+        g3_adj_cgst = filed["itc_cgst"] - filed.get("itc_rcm_cgst", 0)
+        g3_adj_sgst = filed["itc_sgst"] - filed.get("itc_rcm_sgst", 0)
+        g3_adj_cess = filed["itc_cess"] - filed.get("itc_rcm_cess", 0)
+        
+        itc_diff_adj = (
+            abs(gstr2b["itc_igst"] - g3_adj_igst) +
+            abs(gstr2b["itc_cgst"] - g3_adj_cgst) +
+            abs(gstr2b["itc_sgst"] - g3_adj_sgst) +
+            abs(gstr2b["itc_cess"] - g3_adj_cess)
+        )
+        
+        # Smart status logic:
+        # 1. If 3B_adj > 2B for any head → RISK (claiming more than available)
+        # 2. Else if 3B_adj ≈ 2B and RCM exists → RECONCILED (RCM excluded)
+        # 3. Else → PARTIAL CLAIMED (2B > 3B_adj, not claiming full eligible)
+        
+        has_rcm = (filed.get("itc_rcm_igst", 0) + filed.get("itc_rcm_cgst", 0) + 
+                   filed.get("itc_rcm_sgst", 0) + filed.get("itc_rcm_cess", 0)) > 0
+        
+        # Check if any adjusted 3B exceeds 2B (RISK scenario)
+        excess_igst = g3_adj_igst - gstr2b["itc_igst"]
+        excess_cgst = g3_adj_cgst - gstr2b["itc_cgst"]
+        excess_sgst = g3_adj_sgst - gstr2b["itc_sgst"]
+        excess_cess = g3_adj_cess - gstr2b["itc_cess"]
+        
+        has_excess = (excess_igst > 5 or excess_cgst > 5 or excess_sgst > 5 or excess_cess > 5)
+        
+        if has_excess:
+            itc_status = "RISK"  # Claiming more than available in 2B
+        elif itc_diff_adj < 5.0:
+            itc_status = "RECONCILED" if has_rcm else "MATCH"  # Perfect match
+        else:
+            itc_status = "PARTIAL"  # 2B > 3B_adj, not claiming full eligible
+    else:
+        itc_status = "NO 2B DATA"
+        g3_adj_igst = filed["itc_igst"]
+        g3_adj_cgst = filed["itc_cgst"]
+        g3_adj_sgst = filed["itc_sgst"]
+        g3_adj_cess = filed["itc_cess"]
 
     return {
         "year": year, "month": month,
         
+        # ----- SALES: GSTR-1 vs GSTR-3B -----
         "auto_tx": auto["tx"], "g3_tx": filed["tx"],
         "auto_igst": auto["igst"], "g3_igst": filed["igst"],
         "auto_cgst": auto["cgst"], "g3_cgst": filed["cgst"],
@@ -334,27 +517,47 @@ def reconcile_month(year, month, token):
         "auto_exp_igst": auto["exp_igst"], "g3_exp_igst": filed["exp_igst"],
         
         "auto_nil_tx": auto["nil_tx"], "g3_nil_tx": filed["nil_tx"],
-        
-        # "auto_rcm_tx": auto["rcm_tx"], "g3_rcm_tx": filed["rcm_tx"],
-        # "auto_rcm_igst": auto["rcm_igst"], "g3_rcm_igst": filed["rcm_igst"],
-        # "auto_rcm_cgst": auto["rcm_cgst"], "g3_rcm_cgst": filed["rcm_cgst"],
-        # "auto_rcm_sgst": auto["rcm_sgst"], "g3_rcm_sgst": filed["rcm_sgst"],
-        
         "auto_nongst_tx": auto["nongst_tx"], "g3_nongst_tx": filed["nongst_tx"],
         
-        "status": "MATCH" if total_diff < 5.0 else "MISMATCH"
+        "sales_status": "MATCH" if sales_diff < 5.0 else "MISMATCH",
+        
+        # ----- PURCHASES: GSTR-2B vs GSTR-3B ITC -----
+        # ITC as per GSTR-2B (from suppliers - what's available)
+        "g2b_itc_igst": gstr2b["itc_igst"] if gstr2b else 0,
+        "g2b_itc_cgst": gstr2b["itc_cgst"] if gstr2b else 0,
+        "g2b_itc_sgst": gstr2b["itc_sgst"] if gstr2b else 0,
+        "g2b_itc_cess": gstr2b["itc_cess"] if gstr2b else 0,
+        
+        # Total ITC claimed in GSTR-3B (includes RCM)
+        "g3_itc_igst": filed["itc_igst"],
+        "g3_itc_cgst": filed["itc_cgst"],
+        "g3_itc_sgst": filed["itc_sgst"],
+        "g3_itc_cess": filed["itc_cess"],
+        
+        # RCM/Imports ITC in 3B (NOT in 2B - for adjustment)
+        "g3_rcm_igst": filed.get("itc_rcm_igst", 0),
+        "g3_rcm_cgst": filed.get("itc_rcm_cgst", 0),
+        "g3_rcm_sgst": filed.get("itc_rcm_sgst", 0),
+        "g3_rcm_cess": filed.get("itc_rcm_cess", 0),
+        
+        # 3B ITC after removing RCM (should match 2B)
+        "g3_adj_igst": g3_adj_igst,
+        "g3_adj_cgst": g3_adj_cgst,
+        "g3_adj_sgst": g3_adj_sgst,
+        "g3_adj_cess": g3_adj_cess,
+        
+        "itc_status": itc_status,
+        
+        # Overall status
+        "status": "MATCH" if sales_diff < 5.0 else "MISMATCH"
     }
 
 # =====================================================
 # 5. FULL YEAR RECONCILE ENDPOINT (Orchestrator)
 # =====================================================
-# In views.py
-
-from datetime import datetime, date # Ensure these are imported
-# ... other imports ...
 
 # =====================================================
-# RECONCILE ENDPOINT (With 10th of Month Cutoff)
+# RECONCILE ENDPOINT (With Period Selection + 10th of Month Cutoff)
 # =====================================================
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -362,6 +565,10 @@ def reconcile(request):
     try:
         fy_year = int(request.data.get("fy_year"))
         session_id = request.data.get("session_id")
+        
+        # New: Period selection parameters
+        period_type = request.data.get("period_type", "fy")  # "fy", "quarter", "month"
+        period_value = request.data.get("period_value")  # 1-4 for quarter, 1-12 for month
 
         if not session_id:
             return Response({"error": "Session ID required"}, status=400)
@@ -378,22 +585,42 @@ def reconcile(request):
         # If today is 1st-10th: Cutoff is 2 months ago (e.g., On Oct 5, show up to Aug)
         # If today is 11th+: Cutoff is 1 month ago (e.g., On Oct 15, show up to Sep)
         if today.day <= 10:
-            # Go back ~60 days to land in the "Month before last"
             cutoff_date = (today.replace(day=1) - timedelta(days=45))
         else:
-            # Go back ~20 days to land in the "Previous month"
             cutoff_date = (today.replace(day=1) - timedelta(days=15))
         
-        # We only care about Year and Month for comparison
         cutoff_y, cutoff_m = cutoff_date.year, cutoff_date.month
         # ---------------------------------------------------
 
-        months = [(fy_year, m) for m in range(4, 13)] + [(fy_year + 1, m) for m in range(1, 4)]
+        # Generate months list based on period type
+        all_fy_months = [(fy_year, m) for m in range(4, 13)] + [(fy_year + 1, m) for m in range(1, 4)]
+        
+        if period_type == "month" and period_value:
+            # Single month: period_value is 1-12 (April=4, May=5, ..., March=3)
+            month_num = int(period_value)
+            if month_num >= 4:
+                months = [(fy_year, month_num)]
+            else:
+                months = [(fy_year + 1, month_num)]
+                
+        elif period_type == "quarter" and period_value:
+            # Quarter: Q1 = Apr-Jun, Q2 = Jul-Sep, Q3 = Oct-Dec, Q4 = Jan-Mar
+            q = int(period_value)
+            quarter_months = {
+                1: [(fy_year, 4), (fy_year, 5), (fy_year, 6)],
+                2: [(fy_year, 7), (fy_year, 8), (fy_year, 9)],
+                3: [(fy_year, 10), (fy_year, 11), (fy_year, 12)],
+                4: [(fy_year + 1, 1), (fy_year + 1, 2), (fy_year + 1, 3)],
+            }
+            months = quarter_months.get(q, all_fy_months)
+        else:
+            # Default: Full FY
+            months = all_fy_months
+
         results = []
 
         for y, m in months:
-            # 🛑 STOP LOGIC: If the month (y, m) is after our cutoff, skip it
-            # Logic: If Year is higher OR (Year is same AND Month is higher)
+            # Skip future months
             if y > cutoff_y or (y == cutoff_y and m > cutoff_m):
                 continue 
 
@@ -401,16 +628,22 @@ def reconcile(request):
             if res:
                 results.append(res)
             else:
-                # Add placeholder if no data found/fetched
+                # Add placeholder if no data found - includes all fields
                 results.append({
-                    "year": y, "month": m, "status": "NO DATA",
+                    "year": y, "month": m, 
+                    "status": "NO DATA", "sales_status": "NO DATA", "itc_status": "NO DATA",
+                    # Sales fields
                     "auto_tx": 0, "g3_tx": 0, "auto_igst": 0, "g3_igst": 0,
                     "auto_cgst": 0, "g3_cgst": 0, "auto_sgst": 0, "g3_sgst": 0,
                     "auto_exp_tx": 0, "g3_exp_tx": 0, "auto_exp_igst": 0, "g3_exp_igst": 0,
-                    "auto_nil_tx": 0, "g3_nil_tx": 0,
-                    # "auto_rcm_tx": 0, "g3_rcm_tx": 0, "auto_rcm_igst": 0, "g3_rcm_igst": 0,
-                    # "auto_rcm_cgst": 0, "g3_rcm_cgst": 0, "auto_rcm_sgst": 0, "g3_rcm_sgst": 0,
-                    "auto_nongst_tx": 0, "g3_nongst_tx": 0,
+                    "auto_nil_tx": 0, "g3_nil_tx": 0, "auto_nongst_tx": 0, "g3_nongst_tx": 0,
+                    # 2B ITC fields
+                    "g2b_itc_igst": 0, "g2b_itc_cgst": 0, "g2b_itc_sgst": 0, "g2b_itc_cess": 0,
+                    "g3_itc_igst": 0, "g3_itc_cgst": 0, "g3_itc_sgst": 0, "g3_itc_cess": 0,
+                    # RCM ITC fields
+                    "g3_rcm_igst": 0, "g3_rcm_cgst": 0, "g3_rcm_sgst": 0, "g3_rcm_cess": 0,
+                    # Adjusted 3B ITC (3B - RCM)
+                    "g3_adj_igst": 0, "g3_adj_cgst": 0, "g3_adj_sgst": 0, "g3_adj_cess": 0,
                 })
 
         # Safe Delete & Update
@@ -439,7 +672,7 @@ def reconcile(request):
 
 
 # =====================================================
-# EXCEL DOWNLOAD (FIXED KEYS)
+# EXCEL DOWNLOAD (With Sales + Purchases Sheets)
 # =====================================================
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -450,121 +683,117 @@ def download_excel(request):
     fy_year = request.data.get('fy_year', '')
     
     wb = Workbook()
-    ws = wb.active
-    ws.title = "GSTR Reconciliation"
     
-    # --- Styles (Same as before) ---
+    # --- Styles ---
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFF", size=12)
     month_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     month_font = Font(bold=True, color="FFFFFF", size=11)
     diff_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
     match_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    itc_header_fill = PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid")
     border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
-    # --- Headers ---
-    total_cols = len(results) * 4 + 1
-    # Only merge if we actually have results, else default to 10
-    total_cols = max(total_cols, 5) 
-
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
-    ws['A1'] = "GSTR-3B Auto-Liability vs Filed GSTR-3B Reconciliation"
-    ws['A1'].font = Font(bold=True, size=16, color="1F4E78")
-    ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
-    
-    ws['A2'] = f"Username: {username} | GSTIN: {gstin} | FY: {fy_year}-{int(fy_year) + 1}"
-    ws['A2'].font = Font(bold=True, size=11)
-    
-    ws['A4'] = "Particular"
-    ws['A4'].fill = header_fill
-    ws['A4'].font = header_font
-    ws['A4'].border = border
-    
-    # --- Render Month Headers ---
-    col = 2
-    for data in results:
-        month_name = calendar.month_abbr[data['month']] + " " + str(data['year'])
-        ws.merge_cells(start_row=4, start_column=col, end_row=4, end_column=col+2)
-        cell = ws.cell(4, col, month_name)
-        cell.fill = month_fill
-        cell.font = month_font
-        cell.alignment = Alignment(horizontal='center')
-        cell.border = border
+    def create_reco_sheet(ws, title, particulars, subtitle):
+        """Helper to create a reconciliation sheet"""
+        total_cols = max(len(results) * 4 + 1, 5)
         
-        ws.cell(5, col, "GSTR-1").font = Font(bold=True, size=9)
-        ws.cell(5, col+1, "Filed GSTR-3B").font = Font(bold=True, size=9)
-        ws.cell(5, col+2, "Diff").font = Font(bold=True, size=9)
-        col += 4
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
+        ws['A1'] = title
+        ws['A1'].font = Font(bold=True, size=16, color="1F4E78")
+        ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
+        
+        ws['A2'] = f"Username: {username} | GSTIN: {gstin} | FY: {fy_year}-{int(fy_year) + 1}"
+        ws['A2'].font = Font(bold=True, size=11)
+        
+        ws['A4'] = "Particular"
+        ws['A4'].fill = header_fill
+        ws['A4'].font = header_font
+        ws['A4'].border = border
+        
+        # Month Headers
+        col = 2
+        for data in results:
+            month_name = calendar.month_abbr[data['month']] + " " + str(data['year'])
+            ws.merge_cells(start_row=4, start_column=col, end_row=4, end_column=col+2)
+            cell = ws.cell(4, col, month_name)
+            cell.fill = month_fill
+            cell.font = month_font
+            cell.alignment = Alignment(horizontal='center')
+            cell.border = border
+            
+            ws.cell(5, col, subtitle[0]).font = Font(bold=True, size=9)
+            ws.cell(5, col+1, subtitle[1]).font = Font(bold=True, size=9)
+            ws.cell(5, col+2, "Diff").font = Font(bold=True, size=9)
+            col += 4
+        
+        # Data Rows
+        row = 6
+        for particular, key_auto, key_filed in particulars:
+            ws.cell(row, 1, particular).border = border
+            col = 2
+            for data in results:
+                auto_val = float(data.get(key_auto, 0) or 0)
+                filed_val = float(data.get(key_filed, 0) or 0)
+                diff = auto_val - filed_val
+                
+                c1 = ws.cell(row, col, round(auto_val, 2))
+                c1.number_format = '#,##0.00'
+                c1.border = border
+                
+                c2 = ws.cell(row, col+1, round(filed_val, 2))
+                c2.number_format = '#,##0.00'
+                c2.border = border
+                
+                c3 = ws.cell(row, col+2, round(diff, 2))
+                c3.number_format = '#,##0.00'
+                c3.border = border
+                
+                if abs(diff) > 1:
+                    c3.fill = diff_fill
+                    c3.font = Font(bold=True, color="9C0006")
+                else:
+                    c3.fill = match_fill
+                    c3.font = Font(color="006100")
+                
+                col += 4
+            row += 1
+        
+        ws.column_dimensions['A'].width = 30
+        for i in range(2, col):
+            ws.column_dimensions[get_column_letter(i)].width = 18
+        ws.freeze_panes = 'B6'
     
-    # -----------------------------------------------------
-    # 🛠️ FIXED KEY MAPPING (Using Frontend Keys)
-    # -----------------------------------------------------
-    # The frontend sends: tx1 (Auto), tx3 (Filed)
-    # We map them here so Excel gets the correct values.
-    particulars = [
-        # 3.1.a Standard
+    # ========== SHEET 1: Sales (GSTR-1 vs GSTR-3B) ==========
+    ws_sales = wb.active
+    ws_sales.title = "Sales (R1 vs 3B)"
+    
+    sales_particulars = [
         ('3.1.a Taxable Value', 'tx1', 'tx3'),
         ('3.1.a IGST', 'ig1', 'ig3'),
         ('3.1.a CGST', 'cg1', 'cg3'),
         ('3.1.a SGST', 'sg1', 'sg3'),
-        
-        # 3.1.b Exports
         ('3.1.b Export Taxable', 'exp_tx1', 'exp_tx3'),
         ('3.1.b Export IGST', 'exp_ig1', 'exp_ig3'),
-
-        # 3.1.c Nil
         ('3.1.c Nil/Exempt', 'nil_tx1', 'nil_tx3'),
-
-        # 3.1.d RCM
-        # ('3.1.d RCM Taxable', 'rcm_tx1', 'rcm_tx3'),
-        # ('3.1.d RCM IGST', 'rcm_ig1', 'rcm_ig3'),
-        # ('3.1.d RCM CGST', 'rcm_cg1', 'rcm_cg3'),
-        # ('3.1.d RCM SGST', 'rcm_sg1', 'rcm_sg3'),
-
-        # 3.1.e Non-GST
         ('3.1.e Non-GST', 'ng1', 'ng3'),
     ]
+    create_reco_sheet(ws_sales, "GSTR-1 vs GSTR-3B Reconciliation (Sales)", 
+                      sales_particulars, ("GSTR-1", "GSTR-3B"))
     
-    row = 6
-    for particular, key_auto, key_filed in particulars:
-        ws.cell(row, 1, particular).border = border
-        col = 2
-        for data in results:
-            # Using the NEW keys (tx1, tx3) that match frontend
-            auto_val = float(data.get(key_auto, 0) or 0)
-            filed_val = float(data.get(key_filed, 0) or 0)
-            diff = auto_val - filed_val
-            
-            c1 = ws.cell(row, col, round(auto_val, 2))
-            c1.number_format = '#,##0.00'
-            c1.border = border
-            
-            c2 = ws.cell(row, col+1, round(filed_val, 2))
-            c2.number_format = '#,##0.00'
-            c2.border = border
-            
-            c3 = ws.cell(row, col+2, round(diff, 2))
-            c3.number_format = '#,##0.00'
-            c3.border = border
-            
-            # Conditional Formatting
-            if abs(diff) > 1:
-                c3.fill = diff_fill
-                c3.font = Font(bold=True, color="9C0006")
-            else:
-                c3.fill = match_fill
-                c3.font = Font(color="006100")
-            
-            col += 4
-        row += 1
+    # ========== SHEET 2: Purchases (GSTR-2B vs GSTR-3B ITC) ==========
+    ws_purchases = wb.create_sheet("Purchases (2B vs 3B)")
     
-    ws.column_dimensions['A'].width = 30
-
-    # 2. INSERT THIS LOOP: Increase width for all data columns to 22
-    for i in range(2, col):
-        ws.column_dimensions[get_column_letter(i)].width = 22
-
-    ws.freeze_panes = 'B6'
+    # Same format as Sales - rows for each tax type, compare 2B vs 3B Adjusted
+    # NOTE: Using FRONTEND keys since data comes from frontend mapping
+    itc_particulars = [
+        ('ITC - IGST', 'itc_2b_igst', 'itc_adj_igst'),
+        ('ITC - CGST', 'itc_2b_cgst', 'itc_adj_cgst'),
+        ('ITC - SGST', 'itc_2b_sgst', 'itc_adj_sgst'),
+        ('ITC - CESS', 'itc_2b_cess', 'itc_adj_cess'),
+    ]
+    create_reco_sheet(ws_purchases, "GSTR-2B vs GSTR-3B ITC Reconciliation (RCM Adjusted)", 
+                      itc_particulars, ("GSTR-2B", "GSTR-3B (Adj)"))
     
     output = BytesIO()
     wb.save(output)
@@ -575,6 +804,231 @@ def download_excel(request):
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
     response['Content-Disposition'] = (
-        f'attachment; filename="GSTR_3B_Reco_{gstin}_{fy_year}.xlsx"'
+        f'attachment; filename="GSTR_Reconciliation_{gstin}_{fy_year}.xlsx"'
     )
     return response
+
+
+# =====================================================
+# GSTR-3B DETAILS EXCEL DOWNLOAD
+# =====================================================
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def download_3b_excel(request):
+    """
+    Fetch GSTR-3B data for selected month and generate CA-grade structured Excel
+    """
+    try:
+        session_id = request.data.get('session_id')
+        year = int(request.data.get('year'))
+        month = int(request.data.get('month'))
+        
+        session = GSTSession.objects.filter(session_id=session_id).first()
+        if not session:
+            return Response({"error": "Session not found"}, status=400)
+        
+        headers = {
+            "Authorization": session.taxpayer_token,
+            "x-api-key": settings.SANDBOX_API_KEY,
+            "x-api-version": "1.0.0"
+        }
+        
+        # Fetch raw 3B data
+        url = f"https://api.sandbox.co.in/gst/compliance/tax-payer/gstrs/gstr-3b/{year}/{month:02d}"
+        status, data = safe_api_call("GET", url, headers=headers)
+        
+        if status != 200 or not data:
+            return Response({"error": "Failed to fetch GSTR-3B data"}, status=400)
+        
+        gstr3b = data.get("data", {}).get("data", {})
+        gstin = gstr3b.get("gstin", session.gstin)
+        ret_period = gstr3b.get("ret_period", f"{month:02d}{year}")
+        
+        # Create workbook
+        wb = Workbook()
+        
+        # Styles
+        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        section_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+        section_font = Font(bold=True, size=11, color="1F4E78")
+        border = Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin')
+        )
+        money_format = '₹#,##0.00'
+        
+        month_name = calendar.month_name[month]
+        
+        # ========== SHEET 1: SUMMARY ==========
+        ws = wb.active
+        ws.title = "GSTR-3B Summary"
+        
+        # Title
+        ws.merge_cells('A1:F1')
+        ws['A1'] = f"GSTR-3B Details - {month_name} {year}"
+        ws['A1'].font = Font(bold=True, size=16, color="1F4E78")
+        ws['A1'].alignment = Alignment(horizontal='center')
+        
+        ws['A2'] = f"GSTIN: {gstin} | Return Period: {ret_period}"
+        ws['A2'].font = Font(bold=True, size=11)
+        
+        row = 4
+        
+        # ========== TABLE 3.1: OUTWARD SUPPLIES ==========
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        ws.cell(row, 1, "TABLE 3.1 - OUTWARD SUPPLIES").fill = section_fill
+        ws.cell(row, 1).font = section_font
+        row += 1
+        
+        # Headers
+        headers_row = ["Particulars", "Taxable Value", "IGST", "CGST", "SGST", "CESS"]
+        for col, h in enumerate(headers_row, 1):
+            cell = ws.cell(row, col, h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.border = border
+        row += 1
+        
+        sup_details = gstr3b.get("sup_details", {})
+        outward_rows = [
+            ("3.1(a) Outward taxable supplies", "osup_det"),
+            ("3.1(b) Outward taxable supplies (zero rated)", "osup_zero"),
+            ("3.1(c) Other outward supplies (Nil rated, exempted)", "osup_nil_exmp"),
+            ("3.1(d) Inward supplies liable to reverse charge", "isup_rev"),
+            ("3.1(e) Non-GST outward supplies", "osup_nongst"),
+        ]
+        
+        for label, key in outward_rows:
+            section = sup_details.get(key, {})
+            ws.cell(row, 1, label).border = border
+            ws.cell(row, 2, section.get("txval", 0)).number_format = money_format
+            ws.cell(row, 2).border = border
+            ws.cell(row, 3, section.get("iamt", 0)).number_format = money_format
+            ws.cell(row, 3).border = border
+            ws.cell(row, 4, section.get("camt", 0)).number_format = money_format
+            ws.cell(row, 4).border = border
+            ws.cell(row, 5, section.get("samt", 0)).number_format = money_format
+            ws.cell(row, 5).border = border
+            ws.cell(row, 6, section.get("csamt", 0)).number_format = money_format
+            ws.cell(row, 6).border = border
+            row += 1
+        
+        row += 1
+        
+        # ========== TABLE 4: ITC DETAILS ==========
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        ws.cell(row, 1, "TABLE 4 - ELIGIBLE ITC").fill = section_fill
+        ws.cell(row, 1).font = section_font
+        row += 1
+        
+        # Headers
+        for col, h in enumerate(headers_row, 1):
+            cell = ws.cell(row, col, h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.border = border
+        row += 1
+        
+        itc_elg = gstr3b.get("itc_elg", {})
+        itc_avl = itc_elg.get("itc_avl", [])
+        
+        itc_type_labels = {
+            "IMPG": "4(A)(1) Import of goods",
+            "IMPS": "4(A)(2) Import of services",
+            "ISRC": "4(A)(3) Inward supplies liable to RCM",
+            "ISD": "4(A)(4) Inward supplies from ISD",
+            "OTH": "4(A)(5) All other ITC"
+        }
+        
+        for itc_item in itc_avl:
+            ty = itc_item.get("ty", "")
+            label = itc_type_labels.get(ty, f"4(A) {ty}")
+            ws.cell(row, 1, label).border = border
+            ws.cell(row, 2, "-").border = border  # No taxable value for ITC
+            ws.cell(row, 3, itc_item.get("iamt", 0)).number_format = money_format
+            ws.cell(row, 3).border = border
+            ws.cell(row, 4, itc_item.get("camt", 0)).number_format = money_format
+            ws.cell(row, 4).border = border
+            ws.cell(row, 5, itc_item.get("samt", 0)).number_format = money_format
+            ws.cell(row, 5).border = border
+            ws.cell(row, 6, itc_item.get("csamt", 0)).number_format = money_format
+            ws.cell(row, 6).border = border
+            row += 1
+        
+        # ITC Net
+        itc_net = itc_elg.get("itc_net", {})
+        ws.cell(row, 1, "4(C) Net ITC Available").font = Font(bold=True)
+        ws.cell(row, 1).border = border
+        ws.cell(row, 2, "-").border = border
+        ws.cell(row, 3, itc_net.get("iamt", 0)).number_format = money_format
+        ws.cell(row, 3).border = border
+        ws.cell(row, 3).font = Font(bold=True)
+        ws.cell(row, 4, itc_net.get("camt", 0)).number_format = money_format
+        ws.cell(row, 4).border = border
+        ws.cell(row, 4).font = Font(bold=True)
+        ws.cell(row, 5, itc_net.get("samt", 0)).number_format = money_format
+        ws.cell(row, 5).border = border
+        ws.cell(row, 5).font = Font(bold=True)
+        ws.cell(row, 6, itc_net.get("csamt", 0)).number_format = money_format
+        ws.cell(row, 6).border = border
+        ws.cell(row, 6).font = Font(bold=True)
+        row += 2
+        
+        # ========== TABLE 6: TAX PAYMENT ==========
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        ws.cell(row, 1, "TABLE 6 - TAX PAYMENT").fill = section_fill
+        ws.cell(row, 1).font = section_font
+        row += 1
+        
+        tx_pmt = gstr3b.get("tx_pmt", {})
+        net_tax_pay = tx_pmt.get("net_tax_pay", [])
+        
+        pay_headers = ["Description", "IGST", "CGST", "SGST", "CESS", "Interest"]
+        for col, h in enumerate(pay_headers, 1):
+            cell = ws.cell(row, col, h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.border = border
+        row += 1
+        
+        for item in net_tax_pay:
+            desc = item.get("tran_desc", "")
+            ws.cell(row, 1, desc).border = border
+            ws.cell(row, 2, item.get("igst", {}).get("tx", 0)).number_format = money_format
+            ws.cell(row, 2).border = border
+            ws.cell(row, 3, item.get("cgst", {}).get("tx", 0)).number_format = money_format
+            ws.cell(row, 3).border = border
+            ws.cell(row, 4, item.get("sgst", {}).get("tx", 0)).number_format = money_format
+            ws.cell(row, 4).border = border
+            ws.cell(row, 5, item.get("cess", {}).get("tx", 0)).number_format = money_format
+            ws.cell(row, 5).border = border
+            ws.cell(row, 6, item.get("igst", {}).get("intr", 0)).number_format = money_format
+            ws.cell(row, 6).border = border
+            row += 1
+        
+        # Column widths
+        ws.column_dimensions['A'].width = 45
+        for col in ['B', 'C', 'D', 'E', 'F']:
+            ws.column_dimensions[col].width = 15
+        
+        ws.freeze_panes = 'A4'
+        
+        # Save
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        response = HttpResponse(
+            output.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = (
+            f'attachment; filename="GSTR3B_Details_{gstin}_{month_name}_{year}.xlsx"'
+        )
+        return response
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": str(e)}, status=500)
