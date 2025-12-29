@@ -1,6 +1,6 @@
 from django.apps import AppConfig
 
 
-class GetConfig(AppConfig):
+class Gstr1ToexcelConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
-    name = 'get2b'
+    name = 'gstr1toexcel'

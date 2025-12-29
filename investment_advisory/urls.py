@@ -12,4 +12,5 @@ urlpatterns = [
     path('api/bot/', include('bot.urls')),
     path('api/', include('reconciliation.urls')),
     path('api/get2b', include('get2b.urls')),
+    path('api/', include('gstr1toexcel.urls')),
 ]

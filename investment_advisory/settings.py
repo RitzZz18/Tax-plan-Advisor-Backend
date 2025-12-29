@@ -60,7 +60,8 @@ INSTALLED_APPS = [
     'bot',
     'chat_api',
     'gstr3bvsbooks',
-    'get2b'
+    'get2b',
+    'gstr1toexcel',
 ]
 
 # -------------------------------------------------------
