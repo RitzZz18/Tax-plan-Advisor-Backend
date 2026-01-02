@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'gstr3bvsbooks',
     'get2b',
     'gstr1toexcel',
+    'gstr1vsbook',
 ]
 
 # -------------------------------------------------------
