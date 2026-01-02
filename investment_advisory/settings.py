@@ -56,12 +56,14 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'api',
+    'gst_auth',
     'gstr1vs3b',
     'bot',
     'chat_api',
     'gstr3bvsbooks',
     'get2b',
     'gstr1toexcel',
+    'reconciliation',
 ]
 
 # -------------------------------------------------------

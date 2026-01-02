@@ -1,126 +1,25 @@
 import json
 import os
 import requests
-from datetime import timedelta
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.utils import timezone
-from .models import GstAuth
 from .utils import extract_gstr2b_data, generate_excel_bytes
 
-BASE_URL = os.getenv("GST_BASE_URL")
-API_KEY = os.getenv("GST_API_KEY")
-INITIAL_AUTH = os.getenv("GST_AUTH_TOKEN")
+# Import unified session utilities
+from gst_auth.utils import get_valid_session, get_gst_headers
 
-
-def get_headers(access_token=None):
-    headers = {
-        "x-source": "primary",
-        "x-api-version": "1.0.0",
-        "x-api-key": API_KEY,
-        "Content-Type": "application/json",
-        "Authorization": access_token or INITIAL_AUTH,
-    }
-    return headers
+BASE_URL = os.getenv("GST_BASE_URL", "https://api.sandbox.co.in/gst/compliance/tax-payer")
 
 
 # -----------------------------
-# STEP 1: GENERATE OTP
-# -----------------------------
-@csrf_exempt
-def generate_otp(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "Invalid method"}, status=405)
-
-    try:
-        data = json.loads(request.body)
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid JSON"}, status=400)
-
-    username = data.get("username")
-    gstin = data.get("gstin")
-
-    if not username or not gstin:
-        return JsonResponse({"error": "Username and GSTIN are required"}, status=400)
-
-    url = f"{BASE_URL}/otp"
-    payload = {"username": username, "gstin": gstin}
-
-    try:
-        response = requests.post(url, json=payload, headers=get_headers(), timeout=30)
-        res_data = response.json()
-    except requests.RequestException as e:
-        return JsonResponse({"error": f"API request failed: {str(e)}"}, status=500)
-
-    if response.status_code == 200 and res_data.get("data", {}).get("status_cd") == "1":
-        auth = GstAuth.objects.create(
-            username=username,
-            gstin=gstin,
-            transaction_id=res_data.get("transaction_id"),
-            expires_at=timezone.now() + timedelta(minutes=10),
-        )
-
-        return JsonResponse({
-            "success": True,
-            "request_id": str(auth.request_id)
-        })
-
-    error_msg = res_data.get("error", {}).get("message", "Failed to generate OTP")
-    return JsonResponse({"success": False, "error": error_msg}, status=400)
-
-
-# -----------------------------
-# STEP 2: VERIFY OTP
-# -----------------------------
-@csrf_exempt
-def verify_otp(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "Invalid method"}, status=405)
-
-    try:
-        data = json.loads(request.body)
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid JSON"}, status=400)
-
-    request_id = data.get("request_id")
-    otp = data.get("otp")
-
-    if not request_id or not otp:
-        return JsonResponse({"error": "Request ID and OTP are required"}, status=400)
-
-    auth = GstAuth.objects.filter(request_id=request_id).first()
-    if not auth or auth.is_expired():
-        return JsonResponse({"error": "Invalid or expired request"}, status=401)
-
-    url = f"{BASE_URL}/otp/verify?otp={otp}"
-    payload = {
-        "username": auth.username,
-        "gstin": auth.gstin,
-        "transaction_id": auth.transaction_id,
-    }
-
-    try:
-        response = requests.post(url, json=payload, headers=get_headers(), timeout=30)
-        res_data = response.json()
-    except requests.RequestException as e:
-        return JsonResponse({"error": f"API request failed: {str(e)}"}, status=500)
-
-    if response.status_code == 200 and res_data.get("data", {}).get("status_cd") == "1":
-        auth.access_token = res_data["data"]["access_token"]
-        auth.expires_at = timezone.now() + timedelta(hours=6)
-        auth.save()
-
-        return JsonResponse({"success": True, "request_id": str(auth.request_id)})
-
-    error_msg = res_data.get("error", {}).get("message", "OTP verification failed")
-    return JsonResponse({"success": False, "error": error_msg}, status=400)
-
-
-# -----------------------------
-# STEP 3: DOWNLOAD GSTR-2B
+# DOWNLOAD GSTR-2B (Uses unified session)
 # -----------------------------
 @csrf_exempt
 def download_gstr2b(request):
+    """
+    Download GSTR-2B data as Excel.
+    Requires a valid session_id from the unified gst_auth module.
+    """
     if request.method != "POST":
         return JsonResponse({"error": "Invalid method"}, status=405)
 
@@ -129,14 +28,15 @@ def download_gstr2b(request):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    request_id = data.get("request_id")
+    session_id = data.get("session_id")
 
-    if not request_id:
-        return JsonResponse({"error": "Request ID is required"}, status=400)
+    if not session_id:
+        return JsonResponse({"error": "Session ID is required"}, status=400)
 
-    auth = GstAuth.objects.filter(request_id=request_id).first()
-    if not auth or auth.is_expired():
-        return JsonResponse({"error": "Unauthorized or session expired"}, status=401)
+    # Validate session using unified auth
+    session, error = get_valid_session(session_id)
+    if error:
+        return JsonResponse({"error": error}, status=401)
 
     # Check if monthly or quarterly
     month = data.get("month")
@@ -151,7 +51,7 @@ def download_gstr2b(request):
         if month and year:
             # Monthly download
             url = f"{BASE_URL}/gstrs/gstr-2b/{year}/{month}"
-            response = requests.get(url, headers=get_headers(auth.access_token), timeout=60)
+            response = requests.get(url, headers=get_gst_headers(session.taxpayer_token), timeout=60)
 
             if response.status_code != 200:
                 return JsonResponse({"error": "Failed to fetch GSTR-2B data"}, status=400)
@@ -191,7 +91,7 @@ def download_gstr2b(request):
                     fetch_year = start_year
 
                 url = f"{BASE_URL}/gstrs/gstr-2b/{fetch_year}/{month}"
-                response = requests.get(url, headers=get_headers(auth.access_token), timeout=60)
+                response = requests.get(url, headers=get_gst_headers(session.taxpayer_token), timeout=60)
 
                 if response.status_code == 200:
                     b2b, cdnr = extract_gstr2b_data(response.json(), f"{month}-{fetch_year}")
@@ -207,7 +107,7 @@ def download_gstr2b(request):
         # Generate Excel file
         excel = generate_excel_bytes(all_b2b, all_cdnr)
 
-        filename = f"GSTR2B_{auth.gstin}"
+        filename = f"GSTR2B_{session.gstin}"
         if month and year:
             filename += f"_{month}_{year}"
         elif fy_year and quarter:
@@ -225,15 +125,3 @@ def download_gstr2b(request):
         return JsonResponse({"error": f"Failed to fetch GST data: {str(e)}"}, status=500)
     except Exception as e:
         return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
-    
-    
-'''   
-GST_API_KEY=
-GST_AUTH_TOKEN=
-GST_BASE_URL=https://api.sandbox.co.in/gst/compliance/tax-payer
-DB_NAME=
-DB_USER=
-DB_PASSWORD=
-DB_HOST=
-DB_PORT=
-'''

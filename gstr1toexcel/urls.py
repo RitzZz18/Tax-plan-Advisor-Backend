@@ -1,9 +1,7 @@
 from django.urls import path
-from .views import GSTR1DownloadView, SendOTPView, VerifyOTPView, DownloadGSTR1View
+from .views import DownloadGSTR1View
 
 urlpatterns = [
-    path('download-excel/', GSTR1DownloadView.as_view(), name='gstr1-download'),
-    path('send-otp/', SendOTPView.as_view(), name='send-otp'),
-    path('verify-otp/', VerifyOTPView.as_view(), name='verify-otp'),
-    path('download-gstr1/', DownloadGSTR1View.as_view(), name='download-gstr1'),
+    # Download GSTR-1 (requires session_id from gst_auth)
+    path('gstr1/download/', DownloadGSTR1View.as_view(), name='gstr1_download'),
 ]
