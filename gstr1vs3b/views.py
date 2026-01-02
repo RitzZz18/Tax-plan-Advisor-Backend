@@ -1,162 +1,16 @@
-import uuid
-import requests
-from datetime import datetime, timedelta
-
+from datetime import datetime
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from django.http import HttpResponse
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
+from openpyxl.utils import get_column_letter
+from io import BytesIO
+import calendar
 
-from .models import GSTSession, ReconciliationReport
-
-
-# ---------------------------------------------------------
-# 🔧 Utility: Safe API request wrapper
-# ---------------------------------------------------------
-def safe_api_call(method, url, **kwargs):
-    """Unified request handler for cleaner code."""
-    try:
-        kwargs["timeout"] = 20
-        res = requests.request(method, url, **kwargs)
-        try:
-            data = res.json()
-        except:
-            data = {}
-
-        return res.status_code, data
-
-    except requests.Timeout:
-        return 504, {"error": "timeout"}
-
-    except requests.RequestException:
-        return 503, {"error": "connection_failed"}
-
-    except Exception:
-        return 500, {"error": "internal_error"}
-
-
-# ---------------------------------------------------------
-# 🔹 1. GENERATE OTP
-# ---------------------------------------------------------
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def generate_otp(request):
-    username = request.data.get("username")
-    gstin = request.data.get("gstin")
-
-    # Input Validation
-    if not username or not username.strip():
-        return Response({"error": "Username required"}, status=400)
-
-    if not gstin or len(gstin) != 15:
-        return Response({"error": "GSTIN must be 15 characters"}, status=400)
-
-    # Step 1 → Authenticate
-    status_code, auth_data = safe_api_call(
-        "POST",
-        "https://api.sandbox.co.in/authenticate",
-        headers={
-            "x-api-key": settings.SANDBOX_API_KEY,
-            "x-api-secret": settings.SANDBOX_API_SECRET
-        }
-    )
-
-    if status_code != 200:
-        return Response({"error": "Failed to authenticate"}, status=500)
-
-    access_token = auth_data.get("data", {}).get("access_token")
-    if not access_token:
-        return Response({"error": "Invalid token from GST API"}, status=500)
-
-    # Step 2 → Send OTP
-    status_code, otp_data = safe_api_call(
-        "POST",
-        "https://api.sandbox.co.in/gst/compliance/tax-payer/otp",
-        json={"username": username, "gstin": gstin},
-        headers={
-            "x-source": "primary",
-            "x-api-version": "1.0.0",
-            "Authorization": access_token,
-            "x-api-key": settings.SANDBOX_API_KEY,
-            "Content-Type": "application/json"
-        }
-    )
-
-    data = otp_data.get("data", {})
-
-    if data.get("status_cd") == "0":
-        return Response({
-            "error": data.get("message", "OTP failed"),
-            "error_code": data.get("error", {}).get("error_cd", "")
-        }, status=400)
-
-    # Create DB session
-    gst_session = GSTSession.objects.create(
-        session_id=uuid.uuid4(),
-        username=username,
-        gstin=gstin,
-        access_token=access_token
-    )
-
-    # Auto-clean old sessions
-    GSTSession.objects.filter(
-        created_at__lt=datetime.now() - timedelta(hours=24)
-    ).delete()
-
-    return Response({
-        "message": "OTP sent successfully",
-        "session_id": str(gst_session.session_id)
-    })
-
-
-# ---------------------------------------------------------
-# 🔹 2. VERIFY OTP
-# ---------------------------------------------------------
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def verify_otp(request):
-    otp = request.data.get("otp")
-    session_id = request.data.get("session_id")
-
-    if not otp or not otp.strip():
-        return Response({"error": "OTP required"}, status=400)
-
-    if not session_id:
-        return Response({"error": "Session ID required"}, status=400)
-
-    try:
-        gst_session = GSTSession.objects.get(session_id=session_id)
-    except GSTSession.DoesNotExist:
-        return Response({"error": "Session expired"}, status=400)
-
-    # Verify OTP
-    status_code, verify_data = safe_api_call(
-        "POST",
-        "https://api.sandbox.co.in/gst/compliance/tax-payer/otp/verify",
-        json={"username": gst_session.username, "gstin": gst_session.gstin},
-        params={"otp": otp},
-        headers={
-            "x-source": "primary",
-            "x-api-version": "1.0.0",
-            "Authorization": gst_session.access_token,
-            "x-api-key": settings.SANDBOX_API_KEY,
-            "Content-Type": "application/json"
-        }
-    )
-
-    data = verify_data.get("data", {})
-    taxpayer_token = data.get("access_token")
-
-    if data.get("status_cd") == "0" or not taxpayer_token:
-        return Response({"error": "OTP verification failed"}, status=400)
-
-    gst_session.taxpayer_token = taxpayer_token
-    gst_session.save(update_fields=["taxpayer_token", "updated_at"])
-
-    return Response({
-        "message": "OTP verified successfully",
-        "session_id": str(gst_session.session_id)
-    })
+from gst_auth.utils import get_valid_session, safe_api_call
 
 
 # ---------------------------------------------------------
@@ -174,7 +28,7 @@ def fetch_gstr1_section(section, year, month, headers):
 
 
 # ---------------------------------------------------------
-# 🔹 3. MONTHLY RECONCILE
+# 🔹 MONTHLY RECONCILE
 # ---------------------------------------------------------
 def reconcile_month(year, month, token):
     headers = {
@@ -188,7 +42,7 @@ def reconcile_month(year, month, token):
 
     tx1 = ig1 = cg1 = sg1 = zr1 = ng1 = 0
 
-    # Process core sections (optimized)
+    # Process core sections
     try:
         # B2B
         for e in data["b2b"]:
@@ -203,7 +57,7 @@ def reconcile_month(year, month, token):
                     cg1 += float(d.get("camt", 0))
                     sg1 += float(d.get("samt", 0))
 
-        # B2CL + B2CS (merged loop)
+        # B2CL + B2CS
         for sec in ["b2cl", "b2cs"]:
             for e in data[sec]:
                 items = e.get("inv", []) if sec == "b2cl" else [e]
@@ -267,7 +121,7 @@ def reconcile_month(year, month, token):
 
 
 # ---------------------------------------------------------
-# 🔹 4. RECONCILE MAIN
+# 🔹 RECONCILE MAIN (Uses unified session)
 # ---------------------------------------------------------
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -281,13 +135,10 @@ def reconcile(request):
     if not session_id:
         return Response({"error": "Session ID required"}, status=400)
 
-    try:
-        gst_session = GSTSession.objects.get(session_id=session_id)
-    except GSTSession.DoesNotExist:
-        return Response({"error": "Session expired"}, status=400)
-
-    if not gst_session.taxpayer_token:
-        return Response({"error": "Please verify OTP first"}, status=400)
+    # Validate session using unified auth
+    session, error = get_valid_session(session_id)
+    if error:
+        return Response({"error": error}, status=401)
 
     start_year = int(fy_year)
     end_year = start_year + 1
@@ -308,20 +159,135 @@ def reconcile(request):
 
     results = []
     for y, m in valid_months:
-        res = reconcile_month(y, m, gst_session.taxpayer_token)
+        res = reconcile_month(y, m, session.taxpayer_token)
         if res:
             res["year"] = y
             res["month"] = m
             results.append(res)
 
-    ReconciliationReport.objects.create(
-        username=gst_session.username,
-        gstin=gst_session.gstin,
-        fy_year=start_year,
-        report_data=results
-    )
+    return Response({"results": results, "gstin": session.gstin, "username": session.username})
 
-    return Response({"results": results})
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def download_excel(request):
+    results = request.data.get('results', [])
+    username = request.data.get('username', '')
+    gstin = request.data.get('gstin', '')
+    fy_year = request.data.get('fy_year', '')
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "GSTR Reconciliation"
+    
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=12)
+    month_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    month_font = Font(bold=True, color="FFFFFF", size=11)
+    diff_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    match_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    
+    total_cols = len(results) * 4 + 1
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
+    title_cell = ws['A1']
+    title_cell.value = "GSTR-1 vs GSTR-3B Reconciliation Report"
+    title_cell.font = Font(bold=True, size=16, color="1F4E78")
+    title_cell.alignment = Alignment(horizontal='center', vertical='center')
+    ws.row_dimensions[1].height = 30
+    
+    ws['A2'] = f"Username: {username}"
+    ws['A2'].font = Font(bold=True, size=11)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=3)
+    
+    ws.cell(2, 4, f"GSTIN: {gstin}").font = Font(bold=True, size=11)
+    ws.merge_cells(start_row=2, start_column=4, end_row=2, end_column=6)
+    
+    ws.cell(2, 7, f"FY: {fy_year}").font = Font(bold=True, size=11)
+    ws.merge_cells(start_row=2, start_column=7, end_row=2, end_column=9)
+    ws.row_dimensions[2].height = 20
+    
+    ws['A4'] = "Particular"
+    ws['A4'].fill = header_fill
+    ws['A4'].font = header_font
+    ws['A4'].border = border
+    
+    col = 2
+    for data in results:
+        month_name = calendar.month_abbr[data['month']] + " " + str(data['year'])
+        ws.merge_cells(start_row=4, start_column=col, end_row=4, end_column=col+2)
+        cell = ws.cell(4, col, month_name)
+        cell.fill = month_fill
+        cell.font = month_font
+        cell.alignment = Alignment(horizontal='center')
+        cell.border = border
+        col += 4
+    
+    col = 2
+    for _ in results:
+        for header in ['GSTR-1', 'GSTR-3B', 'Diff']:
+            cell = ws.cell(5, col, header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+            cell.border = border
+            col += 1
+        col += 1
+    
+    particulars = [
+        ('Total Taxable Value', 'tx1', 'tx3'),
+        ('IGST', 'ig1', 'ig3'),
+        ('CGST', 'cg1', 'cg3'),
+        ('SGST', 'sg1', 'sg3'),
+        ('Exports', 'zr1', 'zr3'),
+        ('Non-GST', 'ng1', 'ng3')
+    ]
+    
+    row = 6
+    for particular, key1, key3 in particulars:
+        ws.cell(row, 1, particular).border = border
+        col = 2
+        for data in results:
+            gstr1 = data.get(key1, 0)
+            gstr3 = data.get(key3, 0)
+            diff = gstr1 - gstr3
+            
+            ws.cell(row, col, round(gstr1, 2)).border = border
+            ws.cell(row, col).number_format = '#,##0.00'
+            ws.cell(row, col).alignment = Alignment(horizontal='right')
+            
+            ws.cell(row, col+1, round(gstr3, 2)).border = border
+            ws.cell(row, col+1).number_format = '#,##0.00'
+            ws.cell(row, col+1).alignment = Alignment(horizontal='right')
+            
+            diff_cell = ws.cell(row, col+2, round(diff, 2))
+            diff_cell.border = border
+            diff_cell.number_format = '#,##0.00'
+            diff_cell.alignment = Alignment(horizontal='right')
+            
+            if abs(diff) > 0.01:
+                diff_cell.fill = diff_fill
+                diff_cell.font = Font(bold=True, color="9C0006")
+            else:
+                diff_cell.fill = match_fill
+                diff_cell.font = Font(color="006100")
+            
+            col += 4
+        row += 1
+    
+    ws.column_dimensions['A'].width = 25
+    for i in range(2, col):
+        ws.column_dimensions[get_column_letter(i)].width = 14
+    
+    ws.freeze_panes = 'B6'
+    
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    response = HttpResponse(output.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="GSTR_Reconciliation_{gstin}_{fy_year}.xlsx"'
+    return response
 
 
 @api_view(['POST'])
