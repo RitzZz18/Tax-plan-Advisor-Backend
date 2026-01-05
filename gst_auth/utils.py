@@ -37,9 +37,14 @@ def get_sandbox_access_token():
     existing = SandboxAccessToken.objects.first()
     
     if existing and existing.is_valid():
-        return existing.token, None  # ✅ Use cached token
+        print(f"[GST_AUTH] Using cached Sandbox token (expires: {existing.expires_at})")
+        return existing.token, None  
     
-    # Step 2: Token expired or doesn't exist → Fetch new one
+    # print(f"[GST_AUTH] Fetching new Sandbox access token...")
+    # print(f"[GST_AUTH] API Key length: {len(settings.SANDBOX_API_KEY) if settings.SANDBOX_API_KEY else 0}")
+    # print(f"[GST_AUTH] API Key first 15 chars: '{settings.SANDBOX_API_KEY[:15] if settings.SANDBOX_API_KEY else 'None'}'")
+    # print(f"[GST_AUTH] API Secret length: {len(settings.SANDBOX_API_SECRET) if settings.SANDBOX_API_SECRET else 0}")
+    
     status_code, auth_data = safe_api_call(
         "POST",
         "https://api.sandbox.co.in/authenticate",
@@ -49,12 +54,15 @@ def get_sandbox_access_token():
         }
     )
     
-    if status_code != 200:
-        return None, "Failed to authenticate with Sandbox API"
+    # print(f"[GST_AUTH] Sandbox API response: status={status_code}, data={auth_data}")
     
-    access_token = auth_data.get("data", {}).get("access_token")
+    if status_code != 200:
+        error_msg = auth_data.get("error", {}).get("message", "") or auth_data.get("message", "") or str(auth_data)
+        return None, f"Failed to authenticate with Sandbox API: {status_code} - {error_msg}"
+    
+    access_token = auth_data.get("access_token") or auth_data.get("data", {}).get("access_token")
     if not access_token:
-        return None, "Invalid token from Sandbox API"
+        return None, f"Invalid token from Sandbox API: {auth_data}"
     
     # Step 3: Save new token to DB (replace old one)
     SandboxAccessToken.objects.all().delete()  # Remove expired token
@@ -62,6 +70,8 @@ def get_sandbox_access_token():
         token=access_token,
         expires_at=timezone.now() + timedelta(hours=23)  # 23hr buffer before 24hr expiry
     )
+    
+    print(f"[GST_AUTH] New Sandbox token saved successfully")
     
     # Step 4: Return new token
     return access_token, None
