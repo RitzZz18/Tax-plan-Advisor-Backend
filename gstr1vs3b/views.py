@@ -15,6 +15,7 @@ import calendar
 from datetime import datetime, date
 
 from .models import GSTSession, ReconciliationReport
+from gst_auth.utils import get_valid_session
 
 
 # ---------------------------------------------------------
@@ -573,9 +574,10 @@ def reconcile(request):
         if not session_id:
             return Response({"error": "Session ID required"}, status=400)
 
-        session = GSTSession.objects.filter(session_id=session_id).first()
-        if not session or not session.taxpayer_token:
-            return Response({"error": "Invalid session"}, status=400)
+        # Use shared session utility from gst_auth
+        session, error = get_valid_session(session_id)
+        if error:
+            return Response({"error": error}, status=401)
 
         # ---------------------------------------------------
         # 🗓️ DATE CUTOFF LOGIC
@@ -823,9 +825,10 @@ def download_3b_excel(request):
         year = int(request.data.get('year'))
         month = int(request.data.get('month'))
         
-        session = GSTSession.objects.filter(session_id=session_id).first()
-        if not session:
-            return Response({"error": "Session not found"}, status=400)
+        # Use shared session utility from gst_auth
+        session, error = get_valid_session(session_id)
+        if error:
+            return Response({"error": error}, status=401)
         
         headers = {
             "Authorization": session.taxpayer_token,

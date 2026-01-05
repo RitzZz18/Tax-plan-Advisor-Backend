@@ -13,3 +13,4 @@ build/
 db.sqlite3
 *.log
 .DS_Store
+.venv/
