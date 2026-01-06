@@ -45,20 +45,76 @@ def reconciliation(request):
         df = pd.read_excel(file)
         
         # Get months to process
-        months = get_months(reco_type, int(year), int(month) if month else None, quarter)
+        months_list = get_months(reco_type, int(year), int(month) if month else None, quarter)
         
-        # Process reconciliation
-        norm_df = normalize_helper_data(df, months)
-        books_3b = calculate_books_3b(norm_df)
-        portal_3b = fetch_portal_3b(months, session.taxpayer_token)
-        comparison = compare_data(books_3b, portal_3b)
+        # 1. Fetch Party Name
+        party_name = fetch_party_name(session.gstin, session.taxpayer_token) or session.username
+
+        # 2. Process Books Data
+        norm_df = normalize_helper_data(df, months_list)
+        books_monthly = calculate_books_monthly(norm_df, months_list) # Returns { "YYYY-MM": { "3.1(a)": ... } }
+
+        # 3. Process Portal Data
+        portal_monthly = fetch_portal_monthly(months_list, session.taxpayer_token)
+
+        # 4. Process Difference Data
+        diff_monthly, status_monthly = calculate_diff_monthly(books_monthly, portal_monthly)
+
+        # 5. Format for Frontend
+        final_report = []
+        sorted_months = sorted(books_monthly.keys())
         
+        # Rows to include (skipping 3.1(d))
+        particular_mapping = [
+            ("3.1.a Taxable Value", "3.1(a)", "taxable"),
+            ("3.1.a IGST", "3.1(a)", "igst"),
+            ("3.1.a CGST", "3.1(a)", "cgst"),
+            ("3.1.a SGST", "3.1(a)", "sgst"),
+            ("3.1.b Exports Taxable", "3.1(b)", "taxable"),
+            ("3.1.b Exports IGST", "3.1(b)", "igst"),
+            ("3.1.c Nil/Exempt", "3.1(c)", "taxable"),
+            ("3.1.e Non-GST", "3.1(e)", "taxable"),
+        ]
+
+        # Helper for month name
+        def get_month_display(m_str):
+            # m_str is "YYYY-MM"
+            import datetime
+            dt = datetime.datetime.strptime(m_str, "%Y-%m")
+            return dt.strftime("%b %Y")
+
+        for m in sorted_months:
+            month_rows = []
+            m_status = "MATCHED"
+            
+            for part_label, sec, field in particular_mapping:
+                v1 = books_monthly[m].get(sec, {}).get(field, 0)
+                v2 = portal_monthly.get(m, {}).get(sec, {}).get(field, 0)
+                diff = v1 - v2
+                
+                if abs(diff) > 1.0:
+                    m_status = "MISMATCHED"
+                
+                month_rows.append({
+                    "particular": part_label,
+                    "v1": v1,
+                    "v2": v2,
+                    "diff": diff
+                })
+            
+            final_report.append({
+                "month": get_month_display(m),
+                "month_key": m,
+                "status": m_status,
+                "rows": month_rows
+            })
+            
         return Response({
             'status': 'success',
             'message': 'Reconciliation completed',
-            'data': comparison,
+            'data': final_report,
             'session_info': {
-                'party_name': session.username, # Changed 'username' to 'party_name'
+                'party_name': party_name,
                 'gstin': session.gstin,
                 'reco_type': reco_type,
                 'year': year,
@@ -68,7 +124,28 @@ def reconciliation(request):
         })
                 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return Response({'error': f'Processing error: {str(e)}'}, status=500)
+
+
+def fetch_party_name(gstin, token):
+    """Fetch Legal/Trade Name from Sandbox"""
+    try:
+        status, data = safe_api_call(
+            "GET",
+            f"https://api.sandbox.co.in/gst/compliance/tax-payer/details?gstin={gstin}",
+            headers={
+                "x-api-version": "1.0.0",
+                "Authorization": token,
+                "x-api-key": settings.SANDBOX_API_KEY
+            }
+        )
+        if status == 200:
+            return data.get("data", {}).get("tradeNam") or data.get("data", {}).get("lgnm")
+    except:
+        pass
+    return None
 
 
 def get_months(reco_type, year, month=None, quarter=None):
@@ -171,54 +248,73 @@ def normalize_helper_data(df, valid_months):
             "IGST": igst,
             "CGST": cgst,
             "SGST": sgst,
-            "Is_RCM": r["Is_RCM"]
+            "Is_RCM": r["Is_RCM"],
+            "Year": r["Date"].year if "Date" in df.columns and pd.notnull(r["Date"]) else 0,
+            "Month": r["Date"].month if "Date" in df.columns and pd.notnull(r["Date"]) else 0
         })
 
     return pd.DataFrame(normalized_rows)
 
 
-def calculate_books_3b(norm_df):
+def calculate_books_monthly(norm_df, months_list):
     """
-    Aggregate normalized books data into GSTR-3B sections.
+    Returns { "YYYY-MM": { "3.1(a)": {metrics}, ... } }
     """
-    # Initialize 3B structure
-    books_3b = {k: {"taxable": 0.0, "igst": 0.0, "cgst": 0.0, "sgst": 0.0, "tax": 0.0} 
-                for k in ["3.1(a)", "3.1(b)", "3.1(c)", "3.1(d)", "3.1(e)"]}
-    
+    sections = ["3.1(a)", "3.1(b)", "3.1(c)", "3.1(d)", "3.1(e)"]
+    def init_metrics():
+        return {"taxable": 0.0, "igst": 0.0, "cgst": 0.0, "sgst": 0.0, "tax": 0.0}
+
+    # Initialize all requested months with 0
+    monthly_data = {}
+    for y, m in months_list:
+        m_key = f"{y}-{m:02d}"
+        monthly_data[m_key] = {k: init_metrics() for k in sections}
+
     if norm_df.empty:
-        return books_3b
+        return monthly_data
 
     for _, r in norm_df.iterrows():
+        # Skip if no date
+        if r["Year"] == 0 or r["Month"] == 0:
+            continue
+            
+        m_key = f"{int(r['Year'])}-{int(r['Month']):02d}"
+        if m_key not in monthly_data:
+            # Maybe data outside range, ignore or add? 
+            # Given we filtered norm_df by months_list, this updates only valid months
+            continue
+
         tax = r["IGST"] + r["CGST"] + r["SGST"]
         
         # Mapping Logic
         key = None
-        
-        if r["SUP_CAT"] == "RCM":
-            key = "3.1(d)"
-        elif r["SUP_CAT"] in ("EXPWP", "EXPWOP", "SEZWP", "SEZWOP"):
-            key = "3.1(b)"
-        elif r["SUP_CAT"] == "NIL":
-            key = "3.1(c)"
-        elif r["SUP_CAT"] == "NON_GST":
-            key = "3.1(e)"
-        elif r["SUP_CAT"] == "DOM":
-            key = "3.1(a)"
+        if r["SUP_CAT"] == "RCM": key = "3.1(d)"
+        elif r["SUP_CAT"] in ("EXPWP", "EXPWOP", "SEZWP", "SEZWOP"): key = "3.1(b)"
+        elif r["SUP_CAT"] == "NIL": key = "3.1(c)"
+        elif r["SUP_CAT"] == "NON_GST": key = "3.1(e)"
+        elif r["SUP_CAT"] == "DOM": key = "3.1(a)"
             
         if key:
-            books_3b[key]["taxable"] += r["Taxable"]
-            books_3b[key]["igst"] += r["IGST"]
-            books_3b[key]["cgst"] += r["CGST"]
-            books_3b[key]["sgst"] += r["SGST"]
-            books_3b[key]["tax"] += tax
+            monthly_data[m_key][key]["taxable"] += r["Taxable"]
+            monthly_data[m_key][key]["igst"] += r["IGST"]
+            monthly_data[m_key][key]["cgst"] += r["CGST"]
+            monthly_data[m_key][key]["sgst"] += r["SGST"]
+            monthly_data[m_key][key]["tax"] += tax
     
-    return books_3b
+    return monthly_data
 
 
-def fetch_portal_3b(months, taxpayer_access_token):
-    portal_3b = {k: {"taxable":0,"igst":0,"cgst":0,"sgst":0,"tax":0} for k in ["3.1(a)","3.1(b)","3.1(c)","3.1(d)","3.1(e)"]}
+def fetch_portal_monthly(months_list, taxpayer_access_token):
+    sections = ["3.1(a)", "3.1(b)", "3.1(c)", "3.1(d)", "3.1(e)"]
+    def init_metrics():
+        return {"taxable":0,"igst":0,"cgst":0,"sgst":0,"tax":0}
+
+    monthly_data = {}
     
-    for y, m in months:
+    for y, m in months_list:
+        m_key = f"{y}-{m:02d}"
+        monthly_data[m_key] = {k: init_metrics() for k in sections}
+        
         status_code, response_data = safe_api_call(
             "GET",
             f"https://api.sandbox.co.in/gst/compliance/tax-payer/gstrs/gstr-3b/{y}/{str(m).zfill(2)}",
@@ -234,71 +330,78 @@ def fetch_portal_3b(months, taxpayer_access_token):
             
         sup = response_data.get("data", {}).get("data", {}).get("sup_details", {})
         
-        portal_3b["3.1(a)"]["taxable"] += sup.get("osup_det", {}).get("txval", 0)
-        portal_3b["3.1(a)"]["igst"] += sup.get("osup_det", {}).get("iamt", 0)
-        portal_3b["3.1(a)"]["cgst"] += sup.get("osup_det", {}).get("camt", 0)
-        portal_3b["3.1(a)"]["sgst"] += sup.get("osup_det", {}).get("samt", 0)
-        portal_3b["3.1(a)"]["tax"] += sup.get("osup_det", {}).get("iamt", 0) + sup.get("osup_det", {}).get("camt", 0) + sup.get("osup_det", {}).get("samt", 0)
-        
-        portal_3b["3.1(b)"]["taxable"] += sup.get("osup_zero", {}).get("txval", 0)
-        portal_3b["3.1(b)"]["igst"] += sup.get("osup_zero", {}).get("iamt", 0)
-        portal_3b["3.1(b)"]["cgst"] += sup.get("osup_zero", {}).get("camt", 0)
-        portal_3b["3.1(b)"]["sgst"] += sup.get("osup_zero", {}).get("samt", 0)
-        portal_3b["3.1(b)"]["tax"] += sup.get("osup_zero", {}).get("iamt", 0) + sup.get("osup_zero", {}).get("camt", 0) + sup.get("osup_zero", {}).get("samt", 0)
-        
-        portal_3b["3.1(c)"]["taxable"] += sup.get("osup_nil_exmp", {}).get("txval", 0)
-        portal_3b["3.1(d)"]["taxable"] += sup.get("isup_rev", {}).get("txval", 0)
-        portal_3b["3.1(d)"]["igst"] += sup.get("isup_rev", {}).get("iamt", 0)
-        portal_3b["3.1(d)"]["tax"] += sup.get("isup_rev", {}).get("iamt", 0)
-        portal_3b["3.1(e)"]["taxable"] += sup.get("osup_nongst", {}).get("txval", 0)
+        # Helper to process a section
+        def process_sec(sec_key, source_dict):
+            if not source_dict: return
+            txval = source_dict.get("txval", 0)
+            iamt = source_dict.get("iamt", 0)
+            camt = source_dict.get("camt", 0)
+            samt = source_dict.get("samt", 0)
+            tax = iamt + camt + samt
+            
+            monthly_data[m_key][sec_key]["taxable"] += txval
+            monthly_data[m_key][sec_key]["igst"] += iamt
+            monthly_data[m_key][sec_key]["cgst"] += camt
+            monthly_data[m_key][sec_key]["sgst"] += samt
+            monthly_data[m_key][sec_key]["tax"] += tax
+
+        process_sec("3.1(a)", sup.get("osup_det"))
+        process_sec("3.1(b)", sup.get("osup_zero"))
+        process_sec("3.1(c)", sup.get("osup_nil_exmp")) 
+        process_sec("3.1(d)", sup.get("isup_rev"))
+        process_sec("3.1(e)", sup.get("osup_nongst"))
+
+    return monthly_data
+
+
+def calculate_diff_monthly(books_monthly, portal_monthly):
+    sections = ["3.1(a)", "3.1(b)", "3.1(c)", "3.1(d)", "3.1(e)"]
+    def init_metrics(): return {"taxable":0,"igst":0,"cgst":0,"sgst":0,"tax":0}
     
-    return portal_3b
-
-
-def compare_data(books_3b, portal_3b):
-    result = {}
-    for key in books_3b:
-        # Calculate Differences
-        diff_taxable = books_3b[key]['taxable'] - portal_3b[key]['taxable']
-        diff_igst = books_3b[key]['igst'] - portal_3b[key]['igst']
-        diff_cgst = books_3b[key]['cgst'] - portal_3b[key]['cgst']
-        diff_sgst = books_3b[key]['sgst'] - portal_3b[key]['sgst']
-        diff_tax = books_3b[key]['tax'] - portal_3b[key]['tax']
+    diff_monthly = {}
+    status_monthly = {}
+    
+    all_months = sorted(list(set(list(books_monthly.keys()) + list(portal_monthly.keys()))))
+    
+    for m in all_months:
+        diff_monthly[m] = {}
+        status_monthly[m] = {}
         
-        # Determine Status
-        status = "Matched"
-        total_diff_abs = abs(diff_taxable) + abs(diff_igst) + abs(diff_cgst) + abs(diff_sgst)
-        
-        if total_diff_abs > 1.0: # Tolerance of 1 Rupee
-            if key == "3.1(d)" and books_3b[key]['taxable'] == 0 and portal_3b[key]['taxable'] > 0:
-                 status = "RCM - Purchase Side"
-            else:
-                 status = "Mismatch"
-        
-        result[key] = {
-            'books': books_3b[key],
-            'portal': portal_3b[key],
-            'difference': {
-                'taxable': diff_taxable,
-                'igst': diff_igst,
-                'cgst': diff_cgst,
-                'sgst': diff_sgst,
-                'tax': diff_tax
-            },
-            'status': status
-        }
-    return result
+        for sec in sections:
+            b = books_monthly.get(m, {}).get(sec, init_metrics())
+            p = portal_monthly.get(m, {}).get(sec, init_metrics())
+            
+            d_taxable = b['taxable'] - p['taxable']
+            d_igst = b['igst'] - p['igst']
+            d_cgst = b['cgst'] - p['cgst']
+            d_sgst = b['sgst'] - p['sgst']
+            d_tax = b['tax'] - p['tax']
+            
+            diff_monthly[m][sec] = {
+                'taxable': d_taxable, 'igst': d_igst, 'cgst': d_cgst, 'sgst': d_sgst, 'tax': d_tax
+            }
+            
+            # Status
+            status = "Matched"
+            if (abs(d_taxable) + abs(d_igst) + abs(d_cgst) + abs(d_sgst)) > 1.0:
+                 if sec == "3.1(d)" and b['taxable'] == 0 and p['taxable'] > 0:
+                     status = "RCM - Purchase Side"
+                 else:
+                     status = "Mismatch"
+            status_monthly[m][sec] = status
+            
+    return diff_monthly, status_monthly
 
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def download_excel(request):
     try:
-        results = request.data.get('results', {})
-        if not results:
+        report_data = request.data.get('results', []) # Now a list of monthly blocks
+        if not report_data:
             return Response({'error': 'No results data provided'}, status=400)
             
-        username = request.data.get('username', '')
+        username = request.data.get('username', '') 
         gstin = request.data.get('gstin', '')
         reco_type = request.data.get('reco_type', '')
         year = request.data.get('year', '')
@@ -315,109 +418,73 @@ def download_excel(request):
         border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
         center_align = Alignment(horizontal='center', vertical='center')
         
-        # Title
-        ws.merge_cells('A1:N1')
-        title_cell = ws['A1']
-        title_cell.value = "GSTR-3B vs Books Reconciliation Report"
-        title_cell.font = Font(bold=True, size=16, color="1F4E78")
-        title_cell.alignment = Alignment(horizontal='center', vertical='center')
-        
-        # Info
-        ws['A2'] = f"Party Name: {username}"
-        ws['A2'].font = Font(bold=True, size=11)
-        ws['E2'] = f"GSTIN: {gstin}"
-        ws['E2'].font = Font(bold=True, size=11)
-        ws['I2'] = f"Period: {reco_type} {year} {month or quarter or ''}"
-        ws['I2'].font = Font(bold=True, size=11)
+        # Header Info
+        ws.merge_cells('A1:Z1')
+        ws['A1'] = f"Username: {username} | GSTIN: {gstin} | FY: {year}"
+        ws['A1'].font = Font(bold=True)
 
-        # Headers: Table | Books_Taxable | Books_IGST | Books_CGST | Books_SGST | Portal_Taxable | ... | Status
-        headers = [
-            "Table", 
-            "Books_Taxable", "Books_IGST", "Books_CGST", "Books_SGST",
-            "Portal_Taxable", "Portal_IGST", "Portal_CGST", "Portal_SGST",
-            "Diff_Taxable", "Diff_IGST", "Diff_CGST", "Diff_SGST",
-            "Status"
-        ]
+        # Labels for rows
+        particulars = [r['particular'] for r in report_data[0]['rows']] if report_data else []
         
-        for col_idx, header in enumerate(headers, 1):
-            cell = ws.cell(row=4, column=col_idx, value=header)
-            cell.fill = header_fill
+        # Start writing headers
+        ws.cell(row=3, column=1, value="Particular").font = Font(bold=True)
+        ws.cell(row=3, column=1).fill = header_fill
+        ws.cell(row=3, column=1).font = header_font
+        ws.cell(row=3, column=1).border = border
+        
+        col_idx = 2
+        for m_block in report_data:
+            month_name = m_block['month']
+            # Merge 3 cells for month title
+            ws.merge_cells(start_row=3, start_column=col_idx, end_row=3, end_column=col_idx+2)
+            cell = ws.cell(row=3, column=col_idx, value=month_name)
             cell.font = header_font
-            cell.border = border
+            cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
             cell.alignment = center_align
+            cell.border = border
             
-        # Data
-        row = 5
-        # Order of sections
-        sections = ["3.1(a)", "3.1(b)", "3.1(c)", "3.1(d)", "3.1(e)"]
-        
-        for section in sections:
-            data = results.get(section, {})
-            if not data:
-                continue
+            # Sub-headers
+            h1 = ws.cell(row=4, column=col_idx, value="Books")
+            h2 = ws.cell(row=4, column=col_idx+1, value="GSTR-3B")
+            h3 = ws.cell(row=4, column=col_idx+2, value="Diff")
+            for h in [h1, h2, h3]:
+                h.font = Font(bold=True, size=8)
+                h.border = border
+                h.fill = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+            
+            col_idx += 4 # 3 columns data + 1 gap
+            
+        # Write Particulars
+        for i, part in enumerate(particulars, 5):
+            cell = ws.cell(row=i, column=1, value=part)
+            cell.font = Font(bold=True, size=9)
+            cell.border = border
+
+        # Write Data
+        col_idx = 2
+        for m_block in report_data:
+            for i, row in enumerate(m_block['rows'], 5):
+                c1 = ws.cell(row=i, column=col_idx, value=row['v1'])
+                c2 = ws.cell(row=i, column=col_idx+1, value=row['v2'])
+                c3 = ws.cell(row=i, column=col_idx+2, value=row['diff'])
                 
-            books = data.get('books', {})
-            portal = data.get('portal', {})
-            diff = data.get('difference', {})
-            
-            # Helper to safely get float
-            def g(d, k): return float(d.get(k, 0) or 0)
-            
-            # Values
-            b_taxable = g(books, 'taxable')
-            b_igst = g(books, 'igst')
-            b_cgst = g(books, 'cgst')
-            b_sgst = g(books, 'sgst')
-            
-            p_taxable = g(portal, 'taxable')
-            p_igst = g(portal, 'igst')
-            p_cgst = g(portal, 'cgst')
-            p_sgst = g(portal, 'sgst')
-            
-            d_taxable = g(diff, 'taxable')
-            d_igst = g(diff, 'igst')
-            d_cgst = g(diff, 'cgst')
-            d_sgst = g(diff, 'sgst')
-            
-            # Determine Status
-            status = "Matched"
-            total_diff = abs(d_taxable) + abs(d_igst) + abs(d_cgst) + abs(d_sgst)
-            
-            if total_diff > 1.0: # Tolerance
-                if section == "3.1(d)" and b_taxable == 0 and p_taxable > 0:
-                     status = "RCM - Purchase Side"
+                for c in [c1, c2, c3]:
+                    c.border = border
+                    c.number_format = '#,##0.00'
+                    c.font = Font(size=9)
+                
+                # Highlight diff if mismatch
+                if abs(row['diff']) > 1.0:
+                    c3.fill = PatternFill(start_color="FFD9D9", end_color="FFD9D9", fill_type="solid")
                 else:
-                     status = "Mismatch"
+                    c3.fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+                    
+            col_idx += 4
             
-            # Use existing status if available (preferred)
-            if isinstance(data, dict) and 'status' in data:
-                status = data['status']
-
-            # Write Row
-            vals = [
-                section,
-                round(b_taxable, 2), round(b_igst, 2), round(b_cgst, 2), round(b_sgst, 2),
-                round(p_taxable, 2), round(p_igst, 2), round(p_cgst, 2), round(p_sgst, 2),
-                round(d_taxable, 2), round(d_igst, 2), round(d_cgst, 2), round(d_sgst, 2),
-                status
-            ]
-            
-            for col_idx, val in enumerate(vals, 1):
-                cell = ws.cell(row=row, column=col_idx, value=val)
-                cell.border = border
-                
-                # Highlight Status
-                if col_idx == 14: # Status column
-                     if status == "Matched":
-                         cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid") # Green
-                     else:
-                         cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid") # Red
-                
-            row += 1
-
-        # Adjust widths
-        for col_idx in range(1, 15):
-             ws.column_dimensions[get_column_letter(col_idx)].width = 15
+        # Adjust column widths
+        ws.column_dimensions['A'].width = 25
+        for i in range(2, col_idx):
+            ws.column_dimensions[get_column_letter(i)].width = 12
 
         output = BytesIO()
         wb.save(output)
