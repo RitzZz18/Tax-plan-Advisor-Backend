@@ -15,6 +15,16 @@ GSTIN_REGEX = re.compile(
 )
 STANDARD_RATES = [0, 0.1, 0.25, 1, 1.5, 3, 5, 12, 18, 28]
 
+STATE_CODE_MAP = {
+    'JAMMU AND KASHMIR': '01', 'HIMACHAL PRADESH': '02', 'PUNJAB': '03', 'CHANDIGARH': '04', 'UTTARAKHAND': '05', 
+    'HARYANA': '06', 'DELHI': '07', 'RAJASTHAN': '08', 'UTTAR PRADESH': '09', 'BIHAR': '10', 'SIKKIM': '11', 
+    'ARUNACHAL PRADESH': '12', 'NAGALAND': '13', 'MANIPUR': '14', 'MIZORAM': '15', 'TRIPURA': '16', 'MEGHALAY': '17', 
+    'ASSAM': '18', 'WEST BENGAL': '19', 'JHARKHAND': '20', 'ODISHA': '21', 'CHHATTISGARH': '22', 'MADHYA PRADESH': '23', 
+    'GUJARAT': '24', 'DAMAN AND DIU': '25', 'DADRA AND NAGAR HAVELI': '26', 'MAHARASHTRA': '27', 'ANDHRA PRADESH': '28', 
+    'KARNATAKA': '29', 'GOA': '30', 'LAKSHADWEEP': '31', 'KERALA': '32', 'TAMIL NADU': '33', 'PUDUCHERRY': '34', 
+    'ANDAMAN AND NICOBAR ISLANDS': '35', 'TELANGANA': '36', 'ANDHRA PRADESH(NEW)': '37', 'LADAKH': '38', 'OTHER TERRITORY': '97'
+}
+
 
 class GSTR1ReconciliationService:
     """
@@ -66,8 +76,10 @@ class GSTR1ReconciliationService:
     # =====================================================
     # DATA LOADING
     # =====================================================
-    def load_and_normalize_books(self, file_bytes, month_list):
+    def load_and_normalize_books(self, file_bytes, month_list, business_gstin=None):
         """Load Excel from bytes, normalize, and aggregate by GSTIN."""
+        default_pos = str(business_gstin)[:2] if business_gstin and len(str(business_gstin)) >= 2 else None
+
         try:
             df = pd.read_excel(BytesIO(file_bytes))
         except Exception as e:
@@ -105,9 +117,18 @@ class GSTR1ReconciliationService:
                 raw_rate = (total_tax / taxable_total) * 100
                 rate = self.snap_to_standard_rate(raw_rate)
             
+            # Clean POS
+            pos = str(r.get("POS_State", "")).strip().upper()
+            if not pos or pos == "NAN":
+                pos = default_pos
+            elif pos in STATE_CODE_MAP:
+                pos = STATE_CODE_MAP[pos]
+            elif pos.isdigit():
+                pos = pos.zfill(2)
+
             records.append({
                 "GSTIN": r["GSTIN"],
-                "POS_State": r["POS_State"],
+                "POS_State": pos,
                 "SUPPLY_TYPE": supply_type,
                 "Taxable": taxable_total,
                 "IGST": r["IGST"],
@@ -173,35 +194,49 @@ class GSTR1ReconciliationService:
         for c in data:
             gstin = str(c["ctin"]).strip()
             for inv in c.get("inv", []):
-                itm = inv["itms"][0]["itm_det"]
-                rows.append({
-                    "GSTIN": gstin,
-                    "Taxable": self.r2(itm["txval"]),
-                    "IGST": self.r2(itm.get("iamt", 0)),
-                    "CGST": self.r2(itm.get("camt", 0)),
-                    "SGST": self.r2(itm.get("samt", 0))
-                })
+                inv_typ = inv.get("inv_typ", "R")
+                # Map SEZ types
+                if inv_typ == "SEWP": sup_type = "SEZWP"
+                elif inv_typ == "SEWOP": sup_type = "SEZWOP"
+                else: sup_type = "B2B"
+                
+                for itm_wrap in inv.get("itms", []):
+                    itm = itm_wrap.get("itm_det", {})
+                    rows.append({
+                        "GSTIN": gstin,
+                        "SUPPLY_TYPE": sup_type,
+                        "Taxable": self.r2(itm.get("txval", 0)),
+                        "IGST": self.r2(itm.get("iamt", 0)),
+                        "CGST": self.r2(itm.get("camt", 0)),
+                        "SGST": self.r2(itm.get("samt", 0))
+                    })
         return pd.DataFrame(rows)
 
     def portal_rate_df(self, data):
-        return pd.DataFrame([{
-            "Rate": int(r.get("rt", 0)),
-            "Taxable": self.r2(r.get("txval", 0)),
-            "IGST": self.r2(r.get("iamt", 0)),
-            "CGST": self.r2(r.get("camt", 0)),
-            "SGST": self.r2(r.get("samt", 0))
-        } for r in data])
+        rows = []
+        for r in data:
+            rows.append({
+                "Rate": float(r.get("rt", 0)),
+                "POS_State": str(r.get("pos", "")).strip(),
+                "Taxable": self.r2(r.get("txval", 0)),
+                "IGST": self.r2(r.get("iamt", 0)),
+                "CGST": self.r2(r.get("camt", 0)),
+                "SGST": self.r2(r.get("samt", 0))
+            })
+        return pd.DataFrame(rows)
 
     def portal_exp_df(self, data):
         rows = []
         for e in data:
+            exp_typ = e.get("exp_typ", "WOPAY")
+            sup_type = "EXPWP" if exp_typ == "WPAY" else "EXPWOP"
             for inv in e.get("inv", []):
-                itm = inv["itms"][0]
-                rows.append({
-                    "SUPPLY_TYPE": "EXPWP" if e["exp_typ"] == "WPAY" else "EXPWOP",
-                    "Taxable": self.r2(itm["txval"]),
-                    "IGST": self.r2(itm.get("iamt", 0))
-                })
+                for itm in inv.get("itms", []):
+                    rows.append({
+                        "SUPPLY_TYPE": sup_type,
+                        "Taxable": self.r2(itm.get("txval", 0)),
+                        "IGST": self.r2(itm.get("iamt", 0))
+                    })
         return pd.DataFrame(rows)
 
     def portal_cdnr_df(self, data):
@@ -209,23 +244,25 @@ class GSTR1ReconciliationService:
         for c in data:
             gstin = str(c.get("ctin", "")).strip()
             for nt in c.get("nt", []):
-                itm = nt["itms"][0]["itm_det"]
-                rows.append({
-                    "GSTIN": gstin,
-                    "Taxable": -self.r2(itm["txval"]),
-                    "IGST": -self.r2(itm.get("iamt", 0)),
-                    "CGST": -self.r2(itm.get("camt", 0)),
-                    "SGST": -self.r2(itm.get("samt", 0))
-                })
+                for itm_wrap in nt.get("itms", []):
+                    itm = itm_wrap.get("itm_det", {})
+                    rows.append({
+                        "GSTIN": gstin,
+                        "Taxable": -self.r2(itm.get("txval", 0)),
+                        "IGST": -self.r2(itm.get("iamt", 0)),
+                        "CGST": -self.r2(itm.get("camt", 0)),
+                        "SGST": -self.r2(itm.get("samt", 0))
+                    })
         return pd.DataFrame(rows)
 
     # =====================================================
     # RECONCILIATION
     # =====================================================
-    def reconcile(self, books, portal, keys, tolerance=1.0):
+    def reconcile(self, books, portal, keys, tolerance=1.0, filter_matched=False):
         """
         Reconcile books with portal data.
         tolerance: Differences less than this amount (in Rs) are set to 0
+        filter_matched: If True, only returns rows with differences
         """
         if books.empty and portal.empty:
             return pd.DataFrame()
@@ -239,11 +276,29 @@ class GSTR1ReconciliationService:
             if "Year" not in merge_keys: merge_keys.append("Year")
             if "Month" not in merge_keys: merge_keys.append("Month")
 
+        # Ensure consistent types for keys to avoid mismatch
+        def clean_df_keys(df):
+            if df.empty: return df
+            if "Rate" in df.columns:
+                df["Rate"] = pd.to_numeric(df["Rate"], errors='coerce').fillna(0).astype(float).round(2)
+            if "Year" in df.columns:
+                df["Year"] = pd.to_numeric(df["Year"], errors='coerce').fillna(0).astype(int)
+            if "Month" in df.columns:
+                df["Month"] = pd.to_numeric(df["Month"], errors='coerce').fillna(0).astype(int)
+            if "POS_State" in df.columns:
+                df["POS_State"] = df["POS_State"].fillna("").astype(str).str.strip().str.upper()
+                # Remove decimal if it happened (e.g. "27.0" -> "27")
+                df["POS_State"] = df["POS_State"].apply(lambda x: x.split('.')[0] if '.' in x else x).str.zfill(2)
+            return df
+
+        books = clean_df_keys(books)
+        portal = clean_df_keys(portal)
+
         # Ensure portal has the columns too, even if empty
         if not portal.empty:
             for k in merge_keys:
                 if k not in portal.columns:
-                    portal[k] = None
+                    portal[k] = "" if isinstance(k, str) else 0
         else:
             portal = pd.DataFrame(columns=merge_keys + value_cols)
 
@@ -264,8 +319,14 @@ class GSTR1ReconciliationService:
                 out.loc[out[diff_col].abs() < tolerance, diff_col] = 0
                 diff_cols.append(diff_col)
         
-        # Filter out rows where ALL differences are 0
-        if diff_cols:
+        # Add Status Column (Vectorized for efficiency)
+        if not out.empty and diff_cols:
+            abs_sum_diff = out[diff_cols].abs().sum(axis=1)
+            out["Status"] = "Matched"
+            out.loc[abs_sum_diff >= tolerance, "Status"] = "Mismatch"
+
+        # Filter out rows where ALL differences are 0 if requested
+        if filter_matched and diff_cols:
             has_diff = out[diff_cols].abs().sum(axis=1) > 0
             out = out[has_diff].reset_index(drop=True)
         
@@ -277,7 +338,7 @@ class GSTR1ReconciliationService:
         reco_results: { 'B2B': df, 'B2CL': df, ... }
         """
         summary = []
-        sections = ["B2B", "B2CL", "B2CS", "EXP", "CDNR"]
+        sections = ["B2B", "B2CL", "B2CS", "EXP", "SEZ", "CDNR"]
         
         for year, month in month_list:
             m_key = f"{year}-{month:02d}"
@@ -324,7 +385,7 @@ class GSTR1ReconciliationService:
     # =====================================================
     # MAIN RUNNER
     # =====================================================
-    def run(self, file_bytes, session_id, reco_type, year, month=None, quarter=None):
+    def run(self, file_bytes, session_id, reco_type, year, month=None, quarter=None, business_gstin=None):
         """
         Main entry point. Returns a dict of DataFrames keyed by section name + summary.
         """
@@ -332,7 +393,8 @@ class GSTR1ReconciliationService:
         if not month_list:
             raise ValueError("Invalid reconciliation type or parameters")
         
-        books = self.load_and_normalize_books(file_bytes, month_list)
+        books = self.load_and_normalize_books(file_bytes, month_list, business_gstin)
+
         
         # Helper to add Year/Month to portal dataframes
         def add_period(df, y, m):
@@ -374,20 +436,26 @@ class GSTR1ReconciliationService:
         
         # B2B
         b2b_books = books[books["SUPPLY_TYPE"] == "B2B"] if not books.empty else pd.DataFrame()
-        results["B2B"] = self.reconcile(b2b_books, b2b_portal, ["GSTIN"])
+        b2b_p_filtered = b2b_portal[b2b_portal["SUPPLY_TYPE"] == "B2B"] if not b2b_portal.empty else pd.DataFrame()
+        results["B2B"] = self.reconcile(b2b_books, b2b_p_filtered, ["GSTIN"])
         
         # B2CL
         b2cl_books = books[books["SUPPLY_TYPE"] == "B2CL"] if not books.empty else pd.DataFrame()
-        results["B2CL"] = self.reconcile(b2cl_books, b2cl_portal, ["Rate"])
+        results["B2CL"] = self.reconcile(b2cl_books, b2cl_portal, ["Rate", "POS_State"])
         
         # B2CS
         b2cs_books = books[books["SUPPLY_TYPE"] == "B2CS"] if not books.empty else pd.DataFrame()
-        results["B2CS"] = self.reconcile(b2cs_books, b2cs_portal, ["Rate"])
+        results["B2CS"] = self.reconcile(b2cs_books, b2cs_portal, ["Rate", "POS_State"])
         
         # EXPORT
         exp_books = books[books["SUPPLY_TYPE"].isin(["EXPWP", "EXPWOP"])] if not books.empty else pd.DataFrame()
         results["EXP"] = self.reconcile(exp_books, exp_portal, ["SUPPLY_TYPE"])
         
+        # SEZ
+        sez_books = books[books["SUPPLY_TYPE"].isin(["SEZWP", "SEZWOP"])] if not books.empty else pd.DataFrame()
+        sez_p_filtered = b2b_portal[b2b_portal["SUPPLY_TYPE"].isin(["SEZWP", "SEZWOP"])] if not b2b_portal.empty else pd.DataFrame()
+        results["SEZ"] = self.reconcile(sez_books, sez_p_filtered, ["GSTIN"])
+
         # CDNR
         cdnr_books = books[books["SUPPLY_TYPE"] == "CDNR"] if not books.empty else pd.DataFrame()
         results["CDNR"] = self.reconcile(cdnr_books, cdnr_portal, ["GSTIN"])
