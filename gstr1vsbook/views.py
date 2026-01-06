@@ -54,7 +54,8 @@ class GSTR1ReconciliationAPIView(APIView):
                 reco_type=data["reco_type"],
                 year=data["year"],
                 month=data.get("month"),
-                quarter=data.get("quarter")
+                quarter=data.get("quarter"),
+                business_gstin=session.gstin
             )
             
             # 1. Fetch Party Name
@@ -180,18 +181,24 @@ class GSTR1ExcelDownloadAPIView(APIView):
                 ws.column_dimensions[get_column_letter(i)].width = 12
 
             # Add detail sheets
-            sections = ["B2B", "B2CL", "B2CS", "EXP", "CDNR"]
+            sections = ["B2B", "B2CL", "B2CS", "EXP", "SEZ", "CDNR"]
             header_map = {
                 "Taxable_BOOKS": "Books Taxable", "IGST_BOOKS": "Books IGST", "CGST_BOOKS": "Books CGST", "SGST_BOOKS": "Books SGST",
                 "Taxable_PORTAL": "Portal Taxable", "IGST_PORTAL": "Portal IGST", "CGST_PORTAL": "Portal CGST", "SGST_PORTAL": "Portal SGST",
-                "Taxable_DIFF": "Diff Taxable", "IGST_DIFF": "Diff IGST", "CGST_DIFF": "Diff CGST", "SGST_DIFF": "Diff SGST"
+                "Taxable_DIFF": "Difference Taxable", "IGST_DIFF": "Difference IGST", "CGST_DIFF": "Difference CGST", "SGST_DIFF": "Difference SGST"
             }
 
             for section in sections:
                 records = results.get(section, [])
                 if records:
-                    detail_ws = wb.create_sheet(title=section)
+                    detail_ws = wb.create_sheet(title=f"Detailed_{section}")
                     df = pd.DataFrame(records)
+                    
+                    # Ensure specific columns come first
+                    cols = list(df.columns)
+                    priority = ["Year", "Month", "Status"]
+                    ordered_cols = [c for c in priority if c in cols] + [c for c in cols if c not in priority]
+                    df = df[ordered_cols]
                     
                     # Rename columns for display
                     display_cols = [header_map.get(c, c) for c in df.columns]
@@ -207,23 +214,36 @@ class GSTR1ExcelDownloadAPIView(APIView):
                     # Data and Formatting
                     for r_idx, row_values in enumerate(df.values, 2):
                         for c_idx, value in enumerate(row_values, 1):
+                            col_name = df.columns[c_idx-1]
+                            value = row_values[c_idx-1]
+                            
+                            # Standard cell writing
                             cell = detail_ws.cell(row=r_idx, column=c_idx, value=value)
                             cell.border = border
                             
-                            col_name = df.columns[c_idx-1]
-                            if isinstance(value, (int, float)):
+                            # Type-specific formatting
+                            raw_col = col_name.lower()
+                            is_financial = any(x in raw_col for x in ["taxable", "igst", "cgst", "sgst", "diff"])
+                            
+                            if is_financial and isinstance(value, (int, float)):
                                 cell.number_format = '#,##0.00'
+                            elif "year" in raw_col or "month" in raw_col:
+                                cell.number_format = '0' # No decimals for Year/Month
+                            elif "pos" in raw_col:
+                                cell.number_format = '@' # Force text for POS to keep leading zeros (e.g. 09)
+
                                 
-                            # Highlight differences
-                            if "_DIFF" in col_name and isinstance(value, (int, float)):
-                                if abs(value) > 1.0:
-                                    cell.fill = PatternFill(start_color="FFD9D9", end_color="FFD9D9", fill_type="solid")
-                                else:
-                                    cell.fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+                            # Highlight mismatches
+                            if (col_name == "Status" and value == "Mismatch") or \
+                               ("_DIFF" in col_name and isinstance(value, (int, float)) and abs(value) > 1.0):
+                                cell.fill = PatternFill(start_color="FFD9D9", end_color="FFD9D9", fill_type="solid")
+                            elif (col_name == "Status" and value == "Matched") or \
+                                 ("_DIFF" in col_name and isinstance(value, (int, float)) and abs(value) <= 1.0):
+                                cell.fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
 
                     # Auto-adjust column widths
                     for i, col in enumerate(display_cols, 1):
-                        max_length = len(str(col)) + 4
+                        max_length = max(len(str(col)), 10) + 4
                         detail_ws.column_dimensions[get_column_letter(i)].width = max_length
 
             output = io.BytesIO()
