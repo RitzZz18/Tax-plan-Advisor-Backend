@@ -113,15 +113,17 @@ class GSTR1ReconciliationService:
                 "IGST": r["IGST"],
                 "CGST": r["CGST"],
                 "SGST": r["SGST"],
-                "Rate": rate
+                "Rate": rate,
+                "Year": r["Date"].year,
+                "Month": r["Date"].month
             })
         
         normalized = pd.DataFrame(records)
         if normalized.empty:
             return pd.DataFrame()
 
-        # Aggregate
-        grp = normalized.groupby(["GSTIN", "SUPPLY_TYPE", "POS_State", "Rate"], dropna=False)
+        # Aggregate for detail sheet
+        grp = normalized.groupby(["GSTIN", "SUPPLY_TYPE", "POS_State", "Rate", "Year", "Month"], dropna=False)
         return grp[["Taxable", "IGST", "CGST", "SGST"]].sum().reset_index()
 
     def _derive_supply_type(self, r):
@@ -230,13 +232,28 @@ class GSTR1ReconciliationService:
         
         value_cols = ["Taxable", "IGST", "CGST", "SGST"]
         
+        # Merge keys should include Year and Month if available in books
+        merge_keys = list(keys)
+        has_period = "Year" in books.columns and "Month" in books.columns
+        if has_period:
+            if "Year" not in merge_keys: merge_keys.append("Year")
+            if "Month" not in merge_keys: merge_keys.append("Month")
+
+        # Ensure portal has the columns too, even if empty
+        if not portal.empty:
+            for k in merge_keys:
+                if k not in portal.columns:
+                    portal[k] = None
+        else:
+            portal = pd.DataFrame(columns=merge_keys + value_cols)
+
         agg_cols = [c for c in value_cols if c in books.columns]
-        b = books.groupby(keys, dropna=False)[agg_cols].sum().reset_index() if not books.empty else pd.DataFrame(columns=keys + agg_cols)
+        b = books.groupby(merge_keys, dropna=False)[agg_cols].sum().reset_index() if not books.empty else pd.DataFrame(columns=merge_keys + agg_cols)
         
         agg_cols_p = [c for c in value_cols if c in portal.columns]
-        p = portal.groupby(keys, dropna=False)[agg_cols_p].sum().reset_index() if not portal.empty else pd.DataFrame(columns=keys + agg_cols_p)
+        p = portal.groupby(merge_keys, dropna=False)[agg_cols_p].sum().reset_index() if not portal.empty else pd.DataFrame(columns=merge_keys + agg_cols_p)
         
-        out = b.merge(p, on=keys, how="outer", suffixes=("_BOOKS", "_PORTAL")).fillna(0)
+        out = b.merge(p, on=merge_keys, how="outer", suffixes=("_BOOKS", "_PORTAL")).fillna(0)
         
         diff_cols = []
         for c in value_cols:
@@ -254,46 +271,128 @@ class GSTR1ReconciliationService:
         
         return out
 
+    def get_monthly_summary(self, reco_results, month_list):
+        """
+        Generates a summary for GSTR-3B style cards.
+        reco_results: { 'B2B': df, 'B2CL': df, ... }
+        """
+        summary = []
+        sections = ["B2B", "B2CL", "B2CS", "EXP", "CDNR"]
+        
+        for year, month in month_list:
+            m_key = f"{year}-{month:02d}"
+            import datetime
+            dt = datetime.datetime(year, month, 1)
+            month_display = dt.strftime("%b %Y")
+            
+            rows = []
+            m_status = "MATCHED"
+            
+            for section in sections:
+                df = reco_results.get(section, pd.DataFrame())
+                if df.empty:
+                    v1, v2, diff = 0, 0, 0
+                else:
+                    # Filter by month/year if cols exist
+                    mask = (df["Year"] == year) & (df["Month"] == month) if ("Year" in df.columns and "Month" in df.columns) else True
+                    m_df = df[mask]
+                    
+                    # Sum up Taxable
+                    v1 = m_df["Taxable_BOOKS"].sum() if "Taxable_BOOKS" in m_df.columns else 0
+                    v2 = m_df["Taxable_PORTAL"].sum() if "Taxable_PORTAL" in m_df.columns else 0
+                    diff = v1 - v2
+
+                if abs(diff) > 1.0:
+                    m_status = "MISMATCHED"
+                    
+                rows.append({
+                    "particular": f"Total {section} (Taxable)",
+                    "v1": v1,
+                    "v2": v2,
+                    "diff": diff
+                })
+
+            summary.append({
+                "month": month_display,
+                "month_key": m_key,
+                "status": m_status,
+                "rows": rows
+            })
+            
+        return summary
+
     # =====================================================
     # MAIN RUNNER
     # =====================================================
     def run(self, file_bytes, session_id, reco_type, year, month=None, quarter=None):
         """
-        Main entry point. Returns a dict of DataFrames keyed by section name.
+        Main entry point. Returns a dict of DataFrames keyed by section name + summary.
         """
-        # TODO: Use session_id to get taxpayer token for API calls
-        
         month_list = self.get_months_list(reco_type, year, month, quarter)
         if not month_list:
             raise ValueError("Invalid reconciliation type or parameters")
         
         books = self.load_and_normalize_books(file_bytes, month_list)
         
+        # Helper to add Year/Month to portal dataframes
+        def add_period(df, y, m):
+            if df.empty: return df
+            df["Year"] = y
+            df["Month"] = m
+            return df
+
+        # Fetch Portal Data per month to keep Year/Month info
+        b2b_p_frames = []
+        b2cl_p_frames = []
+        b2cs_p_frames = []
+        exp_p_frames = []
+        cdnr_p_frames = []
+
+        for y, m in month_list:
+            b2b_raw = self.fetch_portal("b2b", y, m)
+            if b2b_raw: b2b_p_frames.append(add_period(self.portal_b2b_df(b2b_raw), y, m))
+            
+            b2cl_raw = self.fetch_portal("b2cl", y, m)
+            if b2cl_raw: b2cl_p_frames.append(add_period(self.portal_rate_df(b2cl_raw), y, m))
+            
+            b2cs_raw = self.fetch_portal("b2cs", y, m)
+            if b2cs_raw: b2cs_p_frames.append(add_period(self.portal_rate_df(b2cs_raw), y, m))
+            
+            exp_raw = self.fetch_portal("exp", y, m)
+            if exp_raw: exp_p_frames.append(add_period(self.portal_exp_df(exp_raw), y, m))
+            
+            cdnr_raw = self.fetch_portal("cdnr", y, m)
+            if cdnr_raw: cdnr_p_frames.append(add_period(self.portal_cdnr_df(cdnr_raw), y, m))
+
+        b2b_portal = pd.concat(b2b_p_frames, ignore_index=True) if b2b_p_frames else pd.DataFrame()
+        b2cl_portal = pd.concat(b2cl_p_frames, ignore_index=True) if b2cl_p_frames else pd.DataFrame()
+        b2cs_portal = pd.concat(b2cs_p_frames, ignore_index=True) if b2cs_p_frames else pd.DataFrame()
+        exp_portal = pd.concat(exp_p_frames, ignore_index=True) if exp_p_frames else pd.DataFrame()
+        cdnr_portal = pd.concat(cdnr_p_frames, ignore_index=True) if cdnr_p_frames else pd.DataFrame()
+
         results = {}
         
         # B2B
         b2b_books = books[books["SUPPLY_TYPE"] == "B2B"] if not books.empty else pd.DataFrame()
-        b2b_portal = self.get_aggregated_portal_data("b2b", month_list, self.portal_b2b_df)
         results["B2B"] = self.reconcile(b2b_books, b2b_portal, ["GSTIN"])
         
         # B2CL
         b2cl_books = books[books["SUPPLY_TYPE"] == "B2CL"] if not books.empty else pd.DataFrame()
-        b2cl_portal = self.get_aggregated_portal_data("b2cl", month_list, self.portal_rate_df)
         results["B2CL"] = self.reconcile(b2cl_books, b2cl_portal, ["Rate"])
         
         # B2CS
         b2cs_books = books[books["SUPPLY_TYPE"] == "B2CS"] if not books.empty else pd.DataFrame()
-        b2cs_portal = self.get_aggregated_portal_data("b2cs", month_list, self.portal_rate_df)
         results["B2CS"] = self.reconcile(b2cs_books, b2cs_portal, ["Rate"])
         
         # EXPORT
         exp_books = books[books["SUPPLY_TYPE"].isin(["EXPWP", "EXPWOP"])] if not books.empty else pd.DataFrame()
-        exp_portal = self.get_aggregated_portal_data("exp", month_list, self.portal_exp_df)
         results["EXP"] = self.reconcile(exp_books, exp_portal, ["SUPPLY_TYPE"])
         
         # CDNR
         cdnr_books = books[books["SUPPLY_TYPE"] == "CDNR"] if not books.empty else pd.DataFrame()
-        cdnr_portal = self.get_aggregated_portal_data("cdnr", month_list, self.portal_cdnr_df)
         results["CDNR"] = self.reconcile(cdnr_books, cdnr_portal, ["GSTIN"])
+        
+        # Monthly Summary
+        results["summary"] = self.get_monthly_summary(results, month_list)
         
         return results
