@@ -19,6 +19,8 @@ ALLOWED_HOSTS = [
     '3.6.127.24',
     'tax-plan-advisor-backend.onrender.com',
     '.onrender.com',
+    "https://taxplanadvisor.in",    
+    "https://www.taxplanadvisor.in"
 
 ]
 
@@ -89,7 +91,7 @@ MIDDLEWARE = [
 # -------------------------------------------------------
 # CORS SETTINGS (Merged)
 # -------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 
 CORS_ALLOWED_ORIGINS = [
@@ -99,9 +101,14 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "https://taxplanadvisor.co",
     "https://www.taxplanadvisor.co",
+    "https://taxplanadvisor.in",    
+    "https://www.taxplanadvisor.in"
 ]
 
-CSRF_TRUSTED_ORIGINS = ['https://taxplanadvisor.co', 'https://api.taxplanadvisor.co', 'http://localhost:8080']
+CSRF_TRUSTED_ORIGINS = ['https://taxplanadvisor.co', 'https://api.taxplanadvisor.co', 'http://localhost:8080',"https://taxplanadvisor.in",    
+    "https://www.taxplanadvisor.in"]
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # -------------------------------------------------------
 # URL + WSGI
