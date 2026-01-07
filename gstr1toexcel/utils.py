@@ -151,23 +151,29 @@ def fetch_data(api_key, access_token, endpoint, year, month, retries=5):
     url = f"{API_BASE}/{endpoint}/{year}/{month}" if endpoint else f"{API_BASE}/{year}/{month}"
     headers = {"x-api-key": api_key, "Authorization": access_token, "accept": "application/json"}
     
+    last_error = "Unknown error"
     for attempt in range(retries):
         try:
             r = requests.get(url, headers=headers, timeout=30)
             if r.status_code == 200:
                 return r.json().get("data", {})
-            elif r.status_code == 503 and attempt < retries - 1:
-                time.sleep(5 * (attempt + 1))
+            elif r.status_code == 503 or r.status_code == 429: # Service busy or Rate limit
+                last_error = f"Server busy (Status {r.status_code})"
+                if attempt < retries - 1:
+                    time.sleep(2 * (attempt + 1))
+                    continue
             else:
-                return {}
+                last_error = f"API returned status {r.status_code}"
         except requests.exceptions.ReadTimeout:
+            last_error = "Request timed out"
             if attempt < retries - 1:
-                time.sleep(3)
-            else:
-                return {}
-        except Exception:
-            return {}
-    return {}
+                time.sleep(2)
+                continue
+        except Exception as e:
+            last_error = str(e)
+            
+    # If we reached here, all retries failed
+    raise Exception(f"Failed to fetch {endpoint or 'summary'} for {month}/{year}: {last_error}")
 
 def flatten_json(data, parent="", rows=None):
     if rows is None:
@@ -234,6 +240,7 @@ def generate_excel(gstin, api_key, access_token, download_type, fy, quarter, yea
         for sheet, endpoint in ENDPOINTS.items():
             tasks.append((sheet, endpoint, yr, mn))
     
+    errors = []
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_task = {
             executor.submit(fetch_data, api_key, access_token, t[1], t[2], t[3]): t 
@@ -253,7 +260,13 @@ def generate_excel(gstin, api_key, access_token, download_type, fy, quarter, yea
                         r["Source Type"] = "Manual"
                     sheets[sheet].extend(rows)
             except Exception as e:
-                print(f"Error fetching {endpoint} for {mn}{yr}: {str(e)}")
+                errors.append(str(e))
+    
+    # If any error occurred, we stop and notify the user
+    if errors:
+        # Join errors and show the first unique ones to keep it readable
+        unique_errors = list(set(errors))[:3]
+        raise Exception("Download aborted to prevent incomplete data: " + " | ".join(unique_errors))
     
     # Generate Excel in memory
     output = io.BytesIO()
