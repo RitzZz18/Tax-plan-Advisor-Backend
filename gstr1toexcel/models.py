@@ -18,3 +18,4 @@ class GstAuth(models.Model):
 
     def __str__(self):
         return f"{self.gstin} - {self.request_id}"
+

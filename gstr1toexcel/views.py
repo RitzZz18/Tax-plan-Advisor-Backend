@@ -9,11 +9,11 @@ from gst_auth.utils import get_valid_session
 
 API_KEY = settings.SANDBOX_API_KEY
 
-
 class DownloadGSTR1View(APIView):
     """
     Download GSTR-1 data as Excel.
     Uses unified session from gst_auth for authentication.
+    Speed optimized with parallel fetching.
     """
     def post(self, request):
         session_id = request.data.get('session_id')

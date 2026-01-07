@@ -4,10 +4,10 @@ from datetime import datetime
 import time
 import uuid
 import io
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from django.conf import settings
 
 API_BASE = "https://api.sandbox.co.in/gst/compliance/tax-payer/gstrs/gstr-1"
 
@@ -112,7 +112,7 @@ COLUMN_MAPPING = {
     "desc": "Description",
     "uqc": "UQC",
     "qty": "Total Quantity",
-
+ 
     # Summary Mappings
     "sec_nm": "Section name",
     "ttl_doc": "Number of documents",
@@ -217,29 +217,43 @@ def clean_dataframe(df, sheet_name=""):
 
 def generate_excel(gstin, api_key, access_token, download_type, fy, quarter, year, month):
     if download_type == "fy":
-        months = get_fy_months(fy)
+        months_list = get_fy_months(fy)
         period_label = fy
     elif download_type == "quarterly":
-        months = get_quarterly_months(fy, quarter)
+        months_list = get_quarterly_months(fy, quarter)
         period_label = f"{fy}_Q{quarter}"
     else:
-        months = get_monthly_period(year, month)
+        months_list = get_monthly_period(year, month)
         period_label = f"{month}{year}"
     
     sheets = {k: [] for k in ENDPOINTS}
     
-    for yr, mn in months:
+    # Prepare all tasks for parallel execution
+    tasks = []
+    for yr, mn in months_list:
         for sheet, endpoint in ENDPOINTS.items():
-            data = fetch_data(api_key, access_token, endpoint, yr, mn)
-            if not data:
-                continue
-            rows = flatten_json(data)
-            for r in rows:
-                r["Month"] = mn
-                r["Return Period"] = f"{mn}{yr}"
-                r["Filing Status"] = "FILED"
-                r["Source Type"] = "Manual"
-            sheets[sheet].extend(rows)
+            tasks.append((sheet, endpoint, yr, mn))
+    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_task = {
+            executor.submit(fetch_data, api_key, access_token, t[1], t[2], t[3]): t 
+            for t in tasks
+        }
+        
+        for future in as_completed(future_to_task):
+            sheet, endpoint, yr, mn = future_to_task[future]
+            try:
+                data = future.result()
+                if data:
+                    rows = flatten_json(data)
+                    for r in rows:
+                        r["Month"] = mn
+                        r["Return Period"] = f"{mn}{yr}"
+                        r["Filing Status"] = "FILED"
+                        r["Source Type"] = "Manual"
+                    sheets[sheet].extend(rows)
+            except Exception as e:
+                print(f"Error fetching {endpoint} for {mn}{yr}: {str(e)}")
     
     # Generate Excel in memory
     output = io.BytesIO()
@@ -256,6 +270,7 @@ def generate_excel(gstin, api_key, access_token, download_type, fy, quarter, yea
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         sheet_count = 0
         for sheet, rows in sheets.items():
+            if not rows: continue
             df = pd.DataFrame(rows)
             df = clean_dataframe(df, sheet_name=sheet)
             df.to_excel(writer, sheet_name=sheet, index=False)
