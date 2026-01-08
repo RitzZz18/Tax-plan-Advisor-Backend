@@ -1,0 +1,7 @@
+Watching for file changes with StatReloader
+Not Found: /api/
+[05/Dec/2025 17:55:33] "GET /api/ HTTP/1.1" 404 3595
+Not Found: /api/
+[05/Dec/2025 17:55:37] "GET /api/ HTTP/1.1" 404 3595
+Not Found: /api/
+[05/Dec/2025 17:56:14] "GET /api/ HTTP/1.1" 404 3595
