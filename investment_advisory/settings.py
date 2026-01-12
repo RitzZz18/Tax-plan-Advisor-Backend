@@ -20,7 +20,9 @@ ALLOWED_HOSTS = [
     'tax-plan-advisor-backend.onrender.com',
     '.onrender.com',
     "https://taxplanadvisor.in",    
-    "https://www.taxplanadvisor.in"
+    "https://www.taxplanadvisor.in",
+    "https://api.taxplanadvisor.co",
+    "api.taxplanadvisor.co"
 
 ]
 
