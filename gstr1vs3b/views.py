@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -16,6 +16,8 @@ from datetime import datetime, date
 
 from .models import GSTSession, ReconciliationReport
 from gst_auth.utils import get_valid_session
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 
 # ---------------------------------------------------------
@@ -560,8 +562,21 @@ def reconcile_month(year, month, token):
 # =====================================================
 # RECONCILE ENDPOINT (With Period Selection + 10th of Month Cutoff)
 # =====================================================
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['session_id', 'fy_year'],
+        properties={
+            'session_id': openapi.Schema(type=openapi.TYPE_STRING),
+            'fy_year': openapi.Schema(type=openapi.TYPE_INTEGER, description="Start year of FY (e.g., 2024)"),
+            'period_type': openapi.Schema(type=openapi.TYPE_STRING, enum=['fy', 'quarter', 'month']),
+            'period_value': openapi.Schema(type=openapi.TYPE_INTEGER, description="1-4 for Q, 1-12 for M")
+        }
+    ),
+    responses={200: "Reconciliation Results"}
+)
 @api_view(["POST"])
-@permission_classes([AllowAny])
 def reconcile(request):
     try:
         fy_year = int(request.data.get("fy_year"))
@@ -676,8 +691,20 @@ def reconcile(request):
 # =====================================================
 # EXCEL DOWNLOAD (With Sales + Purchases Sheets)
 # =====================================================
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        properties={
+            'results': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
+            'username': openapi.Schema(type=openapi.TYPE_STRING),
+            'gstin': openapi.Schema(type=openapi.TYPE_STRING),
+            'fy_year': openapi.Schema(type=openapi.TYPE_STRING)
+        }
+    ),
+    responses={200: "Excel File"}
+)
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def download_excel(request):
     results = request.data.get('results', [])
     username = request.data.get('username', '')
@@ -814,8 +841,20 @@ def download_excel(request):
 # =====================================================
 # GSTR-3B DETAILS EXCEL DOWNLOAD
 # =====================================================
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['session_id', 'year', 'month'],
+        properties={
+            'session_id': openapi.Schema(type=openapi.TYPE_STRING),
+            'year': openapi.Schema(type=openapi.TYPE_INTEGER),
+            'month': openapi.Schema(type=openapi.TYPE_INTEGER)
+        }
+    ),
+    responses={200: "3B Excel File"}
+)
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def download_3b_excel(request):
     """
     Fetch GSTR-3B data for selected month and generate CA-grade structured Excel

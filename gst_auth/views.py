@@ -2,15 +2,40 @@ from datetime import timedelta
 
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
 from .models import UnifiedGSTSession
 from .utils import safe_api_call, get_sandbox_access_token, get_gst_headers, cleanup_expired_sessions
 
 
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['username', 'gstin'],
+        properties={
+            'username': openapi.Schema(type=openapi.TYPE_STRING, description='Registered Username'),
+            'gstin': openapi.Schema(type=openapi.TYPE_STRING, description='15-digit GSTIN'),
+        }
+    ),
+    responses={
+        200: openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                'message': openapi.Schema(type=openapi.TYPE_STRING),
+                'session_id': openapi.Schema(type=openapi.TYPE_STRING, format='uuid'),
+            }
+        ),
+        400: "Validation Error"
+    }
+)
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def generate_otp(request):
     """
     Step 1: Generate OTP for GST authentication.
@@ -66,8 +91,32 @@ def generate_otp(request):
     })
 
 
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['session_id', 'otp'],
+        properties={
+            'session_id': openapi.Schema(type=openapi.TYPE_STRING, format='uuid'),
+            'otp': openapi.Schema(type=openapi.TYPE_STRING, description='OTP received on mobile'),
+        }
+    ),
+    responses={
+        200: openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                'message': openapi.Schema(type=openapi.TYPE_STRING),
+                'session_id': openapi.Schema(type=openapi.TYPE_STRING),
+                'gstin': openapi.Schema(type=openapi.TYPE_STRING),
+                'username': openapi.Schema(type=openapi.TYPE_STRING),
+            }
+        ),
+        400: "Invalid OTP or Session Expired"
+    }
+)
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def verify_otp(request):
     """
     Step 2: Verify OTP and activate session.
@@ -129,6 +178,22 @@ def verify_otp(request):
     })
 
 
+@swagger_auto_schema(
+    method='get',
+    manual_parameters=[
+        openapi.Parameter('session_id', openapi.IN_QUERY, description="Session ID to check", type=openapi.TYPE_STRING, required=True)
+    ],
+    responses={
+        200: openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'is_valid': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                'is_verified': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                'expires_in_seconds': openapi.Schema(type=openapi.TYPE_INTEGER),
+            }
+        )
+    }
+)
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def session_status(request):

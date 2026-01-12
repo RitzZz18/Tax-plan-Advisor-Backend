@@ -13,6 +13,8 @@ from gst_auth.utils import get_valid_session, safe_api_call
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 
 class GSTR1ReconciliationAPIView(APIView):
@@ -21,7 +23,19 @@ class GSTR1ReconciliationAPIView(APIView):
     Uses unified session from gst_auth for authentication.
     """
     parser_classes = [MultiPartParser, FormParser]
-    
+
+    @swagger_auto_schema(
+        consumes=['multipart/form-data'],
+        manual_parameters=[
+            openapi.Parameter('file', openapi.IN_FORM, type=openapi.TYPE_FILE, description='Excel File'),
+            openapi.Parameter('session_id', openapi.IN_FORM, type=openapi.TYPE_STRING),
+            openapi.Parameter('reco_type', openapi.IN_FORM, type=openapi.TYPE_STRING, enum=['MONTHLY', 'QUARTERLY', 'FY']),
+            openapi.Parameter('year', openapi.IN_FORM, type=openapi.TYPE_INTEGER),
+            openapi.Parameter('month', openapi.IN_FORM, type=openapi.TYPE_INTEGER),
+            openapi.Parameter('quarter', openapi.IN_FORM, type=openapi.TYPE_STRING)
+        ],
+        responses={200: "Reconciliation Data"}
+    )
     def post(self, request, *args, **kwargs):
         serializer = GSTR1ReconciliationRequestSerializer(data=request.data)
         
@@ -96,6 +110,18 @@ class GSTR1ReconciliationAPIView(APIView):
 
 
 class GSTR1ExcelDownloadAPIView(APIView):
+    @swagger_auto_schema(
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'results': openapi.Schema(type=openapi.TYPE_OBJECT),
+                'username': openapi.Schema(type=openapi.TYPE_STRING),
+                'gstin': openapi.Schema(type=openapi.TYPE_STRING),
+                'year': openapi.Schema(type=openapi.TYPE_STRING)
+            }
+        ),
+        responses={200: "Excel File"}
+    )
     def post(self, request, *args, **kwargs):
         try:
             results = request.data.get('results', {})

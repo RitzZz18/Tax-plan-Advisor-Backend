@@ -1,7 +1,7 @@
 from django.http import HttpResponse
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 import pandas as pd
 from openpyxl import Workbook
@@ -10,10 +10,25 @@ from openpyxl.utils import get_column_letter
 from io import BytesIO
 
 from gst_auth.utils import get_valid_session, safe_api_call
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+from rest_framework.parsers import MultiPartParser, FormParser
 
 
+@swagger_auto_schema(
+    method='post',
+    consumes=['multipart/form-data'],
+    manual_parameters=[
+        openapi.Parameter('file', openapi.IN_FORM, type=openapi.TYPE_FILE, description='Excel File'),
+        openapi.Parameter('session_id', openapi.IN_FORM, type=openapi.TYPE_STRING),
+        openapi.Parameter('reco_type', openapi.IN_FORM, type=openapi.TYPE_STRING, enum=['MONTHLY', 'QUARTERLY', 'FY']),
+        openapi.Parameter('year', openapi.IN_FORM, type=openapi.TYPE_INTEGER),
+        openapi.Parameter('month', openapi.IN_FORM, type=openapi.TYPE_INTEGER),
+        openapi.Parameter('quarter', openapi.IN_FORM, type=openapi.TYPE_STRING)
+    ],
+    responses={200: "Reconciliation Data"}
+)
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def reconciliation(request):
     """
     GSTR-3B vs Books Reconciliation.
@@ -393,8 +408,20 @@ def calculate_diff_monthly(books_monthly, portal_monthly):
     return diff_monthly, status_monthly
 
 
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        properties={
+            'results': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
+            'username': openapi.Schema(type=openapi.TYPE_STRING),
+            'gstin': openapi.Schema(type=openapi.TYPE_STRING),
+            'year': openapi.Schema(type=openapi.TYPE_STRING)
+        }
+    ),
+    responses={200: "Excel File"}
+)
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def download_excel(request):
     try:
         report_data = request.data.get('results', []) # Now a list of monthly blocks

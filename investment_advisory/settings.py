@@ -68,6 +68,13 @@ INSTALLED_APPS = [
     'gstr1toexcel',
     'reconciliation',
     'gstr1vsbook',
+    
+    # Third Party
+    'drf_yasg',
+    'rest_framework.authtoken',
+
+    # Internal
+    'user_management',
 ]
 
 # -------------------------------------------------------
@@ -103,11 +110,12 @@ CORS_ALLOWED_ORIGINS = [
     "https://taxplanadvisor.co",
     "https://www.taxplanadvisor.co",
     "https://taxplanadvisor.in",    
-    "https://www.taxplanadvisor.in"
+    "https://www.taxplanadvisor.in",
+    "https://taxplanadvisor.lovable.app"
 ]
 
 CSRF_TRUSTED_ORIGINS = ['https://taxplanadvisor.co', 'https://api.taxplanadvisor.co', 'http://localhost:8080',"https://taxplanadvisor.in",    
-    "https://www.taxplanadvisor.in"]
+    "https://www.taxplanadvisor.in","https://taxplanadvisor.lovable.app"]
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
@@ -136,6 +144,20 @@ DATABASES = {
         "PORT": os.getenv("SUPABASE_DB_PORT", "5432"),
     }
 }
+
+# -------------------------------------------------------
+# SWAGGER SETTINGS
+# -------------------------------------------------------
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header'
+        }
+    }
+}
+
 # -------------------------------------------------------
 # REST FRAMEWORK (your version)
 # -------------------------------------------------------
@@ -143,8 +165,14 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
     ],
-    'DEFAULT_AUTHENTICATION_CLASSES': [],
-    'DEFAULT_PERMISSION_CLASSES': [],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
 }
 
 # -------------------------------------------------------

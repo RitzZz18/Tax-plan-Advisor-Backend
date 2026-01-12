@@ -12,6 +12,8 @@ import logging
 from google import genai
 from google.genai import types
 from .models import User, Conversation
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -223,6 +225,27 @@ def extract_json_from_text(text: str) -> Dict[str, Any]:
 
 
 class OnboardingView(APIView):
+    @swagger_auto_schema(
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['name', 'phone'],
+            properties={
+                'name': openapi.Schema(type=openapi.TYPE_STRING),
+                'phone': openapi.Schema(type=openapi.TYPE_STRING)
+            }
+        ),
+        responses={
+            200: openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'user_id': openapi.Schema(type=openapi.TYPE_STRING),
+                    'name': openapi.Schema(type=openapi.TYPE_STRING),
+                    'greeting': openapi.Schema(type=openapi.TYPE_STRING),
+                    'follow_ups': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_STRING)),
+                }
+            )
+        }
+    )
     def post(self, request):
         name = request.data.get("name", "").strip()
         phone = request.data.get("phone", "").strip()
@@ -261,7 +284,27 @@ class ChatbotView(APIView):
        1. Ask Gemini which tool to use
        2. Use that tool in the real answer
     """
-
+    
+    @swagger_auto_schema(
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['user_id', 'prompt'],
+            properties={
+                'user_id': openapi.Schema(type=openapi.TYPE_STRING, description="UUID from onboarding"),
+                'prompt': openapi.Schema(type=openapi.TYPE_STRING, description="User's tax query")
+            }
+        ),
+        responses={
+            200: openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'response': openapi.Schema(type=openapi.TYPE_STRING, description="Markdown Answer"),
+                    'follow_ups': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_STRING)),
+                    'tool_used': openapi.Schema(type=openapi.TYPE_STRING, description="google_search / file_search / none"),
+                }
+            )
+        }
+    )
     def post(self, request):
         if client is None:
             return Response({"error": "AI service misconfigured"}, status=503)

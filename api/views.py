@@ -4,6 +4,9 @@ from rest_framework import status
 from .models import DubaiInquiry
 import logging
 
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,6 +22,17 @@ def health_check(request):
 # ================================================================
 # REGENERATE ALLOCATION
 # ================================================================
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        properties={
+            'currentAllocation': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
+            'excludedInstruments': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_STRING))
+        }
+    ),
+    responses={200: openapi.Schema(type=openapi.TYPE_OBJECT)}
+)
 @api_view(["POST"])
 def regenerate_allocation(request):
     try:
@@ -204,6 +218,21 @@ def generate_allocation(risk_appetite, expected_return):
     
     return allocation
 
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['incomes', 'investmentValue'],
+        properties={
+            'incomes': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
+            'expectedReturn': openapi.Schema(type=openapi.TYPE_STRING, enum=['low','medium','high']),
+            'riskAppetite': openapi.Schema(type=openapi.TYPE_STRING, enum=['low','medium','high']),
+            'investmentMode': openapi.Schema(type=openapi.TYPE_STRING, enum=['amount','percent']),
+            'investmentValue': openapi.Schema(type=openapi.TYPE_INTEGER)
+        }
+    ),
+    responses={200: openapi.Schema(type=openapi.TYPE_OBJECT)}
+)
 @api_view(["GET", "POST"])
 def generate_investment_plan(request):
     if request.method == "GET":
@@ -264,6 +293,20 @@ def generate_investment_plan(request):
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['name', 'email', 'phone', 'budget'],
+        properties={
+            'name': openapi.Schema(type=openapi.TYPE_STRING),
+            'email': openapi.Schema(type=openapi.TYPE_STRING),
+            'phone': openapi.Schema(type=openapi.TYPE_STRING),
+            'budget': openapi.Schema(type=openapi.TYPE_STRING),
+        }
+    ),
+    responses={200: "Success"}
+)
 @api_view(["GET", "POST"])
 def save_inquiry(request):
     DubaiInquiry.objects.create(**request.data)

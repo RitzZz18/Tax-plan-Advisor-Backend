@@ -6,6 +6,8 @@ from django.conf import settings
 
 from .utils import generate_excel
 from gst_auth.utils import get_valid_session
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 API_KEY = settings.SANDBOX_API_KEY
 
@@ -13,8 +15,24 @@ class DownloadGSTR1View(APIView):
     """
     Download GSTR-1 data as Excel.
     Uses unified session from gst_auth for authentication.
+    Uses unified session from gst_auth for authentication.
     Speed optimized with parallel fetching.
     """
+    @swagger_auto_schema(
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['session_id'],
+            properties={
+                'session_id': openapi.Schema(type=openapi.TYPE_STRING),
+                'type': openapi.Schema(type=openapi.TYPE_STRING, enum=['month', 'quarter', 'fy']),
+                'year': openapi.Schema(type=openapi.TYPE_INTEGER),
+                'month': openapi.Schema(type=openapi.TYPE_STRING, description="01-12"),
+                'quarter': openapi.Schema(type=openapi.TYPE_STRING, enum=['Q1','Q2','Q3','Q4']),
+                'fy': openapi.Schema(type=openapi.TYPE_STRING, description="e.g. 2024-25")
+            }
+        ),
+        responses={200: "GSTR1 Excel File"}
+    )
     def post(self, request):
         session_id = request.data.get('session_id')
         type_val = request.data.get('type', 'month')
