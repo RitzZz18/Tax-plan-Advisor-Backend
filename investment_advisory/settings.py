@@ -59,16 +59,11 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'api',
-    'gst_auth',
-    'gstr1vs3b',
     'bot',
     'chat_api',
-    'gstr3bvsbooks',
-    'get2b',
-    'gstr1toexcel',
-    'reconciliation',
-    'gstr1vsbook',
+    'gst_reports',
 ]
+
 
 # -------------------------------------------------------
 # MIDDLEWARE (Correct order for cors)
@@ -106,7 +101,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://www.taxplanadvisor.in"
 ]
 
-CSRF_TRUSTED_ORIGINS = ['https://taxplanadvisor.co', 'https://api.taxplanadvisor.co', 'http://localhost:8080',"https://taxplanadvisor.in",    
+CSRF_TRUSTED_ORIGINS = ['https://taxplanadvisor.co', 'http://localhost:8000', 'http://localhost:8080',"https://taxplanadvisor.in",    
     "https://www.taxplanadvisor.in"]
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
