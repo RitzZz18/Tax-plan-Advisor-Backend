@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     'gstr1toexcel',
     'reconciliation',
     'gstr1vsbook',
+    'calculator'
 ]
 
 # -------------------------------------------------------
