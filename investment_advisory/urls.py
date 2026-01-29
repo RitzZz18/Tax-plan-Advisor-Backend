@@ -16,4 +16,5 @@ urlpatterns = [
     path('api/', include('gstr1toexcel.urls')),
     path('api/gstr1vsbook/', include('gstr1vsbook.urls')),
     path('api/calculator/', include('calculator.urls')),
+    path('api/tds/', include('tds_api.urls')),
 ]
