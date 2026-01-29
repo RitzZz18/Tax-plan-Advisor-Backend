@@ -74,13 +74,13 @@ TDS_SECTIONS = [
     TDSSection("194BA", "Winnings from online games (From 01-Apr-2023)", None, "-", 30, 30, 30),
     TDSSection("194BA-Sub(2)", "Net Winnings from online games - where net winnings insufficient", None, "-", 30, 30, 30),
     TDSSection("194BB", "Winnings from Horse Race", 10000, "₹10,000", 30, 30, 30),
-    TDSSection("194C", "Payment to Contractors (Annual Aggregate)", 100000, "₹1,00,000 (Annual)", 2, 1, 20, has_threshold_types=True,
+    TDSSection("194C-A", "Payment to Contractors (Annual Aggregate)", 100000, "₹1,00,000 (Annual)", 2, 1, 20, has_threshold_types=True,
                threshold_types=[
                    {"type": "Single Transaction", "threshold": 30000, "threshold_note": "₹30,000 (Single Transaction)"},
                    {"type": "Annual Aggregate", "threshold": 100000, "threshold_note": "₹1,00,000 (Annual)"}
                ]),
-    TDSSection("194C-Single", "Payment to Contractors (Single Transaction ≥ ₹30,000)", 30000, "₹30,000 (Single)", 2, 1, 20),
-    TDSSection("194C-Exceed", "Payment to Contractors (Threshold already exceeded)", None, "Full Amount (Threshold Exceeded)", 2, 1, 20),
+    TDSSection("194C-S", "Payment to Contractors (Single Transaction ≥ ₹30,000)", 30000, "₹30,000 (Single)", 2, 1, 20),
+    TDSSection("194C", "Payment to Contractors (Threshold already exceeded)", None, "Full Amount (Threshold Exceeded)", 2, 1, 20),
     TDSSection("194IC", "Payment under Specified agreement", None, "-", 10, 10, 20),
     TDSSection("194D", "Insurance Commission", 20000, "₹20,000", 10, 2, 20),
     TDSSection("194DA", "Payment in respect of life insurance policy (from 01.10.2014)", 100000, "₹1,00,000", 2, 2, 20),
