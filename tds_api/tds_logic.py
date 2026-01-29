@@ -80,6 +80,7 @@ TDS_SECTIONS = [
                    {"type": "Annual Aggregate", "threshold": 100000, "threshold_note": "₹1,00,000 (Annual)"}
                ]),
     TDSSection("194C-Single", "Payment to Contractors (Single Transaction ≥ ₹30,000)", 30000, "₹30,000 (Single)", 2, 1, 20),
+    TDSSection("194C-Exceed", "Payment to Contractors (Threshold already exceeded)", None, "Full Amount (Threshold Exceeded)", 2, 1, 20),
     TDSSection("194IC", "Payment under Specified agreement", None, "-", 10, 10, 20),
     TDSSection("194D", "Insurance Commission", 20000, "₹20,000", 10, 2, 20),
     TDSSection("194DA", "Payment in respect of life insurance policy (from 01.10.2014)", 100000, "₹1,00,000", 2, 2, 20),
