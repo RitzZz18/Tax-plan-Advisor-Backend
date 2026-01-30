@@ -346,6 +346,10 @@ def calculate_full_tds(
         apply_tds_on_excess = False
         effective_threshold = None  # No threshold check needed
     
+    # For section 194C: If threshold was exceeded before this payment, TDS applies on full amount
+    if section.section == "194C" and threshold_exceeded_before:
+        effective_threshold = None  # No threshold check needed, TDS on full amount
+    
     # Calculate TDS
     tds_amount, above_threshold = calculate_tds(amount, rate, effective_threshold, apply_tds_on_excess)
     
