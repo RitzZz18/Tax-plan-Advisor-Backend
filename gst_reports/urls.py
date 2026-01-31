@@ -14,6 +14,7 @@ urlpatterns = [
     path('reconcile/1vsbooks/', reconciliation_views.reconcile_1_vs_books, name='reconcile_1_vs_books'),
     path('reconcile/3bvsbooks/', reconciliation_views.reconcile_3b_vs_books, name='reconcile_3b_vs_books'),
     path('reconcile/2bvsbooks/', reconciliation_views.reconcile_2b_vs_books, name='reconcile_2b_vs_books'),
+    path('reconcile/2b-manual/', reconciliation_views.reconcile_2b_books_manual, name='reconcile_2b_manual'),
     path('reconcile/comprehensive/', reconciliation_views.reconcile_comprehensive_view, name='reconcile_comprehensive'),
     
     # Downloads

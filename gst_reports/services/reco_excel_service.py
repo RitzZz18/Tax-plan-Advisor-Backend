@@ -174,7 +174,7 @@ class ReconciliationExcelService:
         return output, filename
 
     @staticmethod
-    def generate_books_reco_excel(results, username, gstin, year, title):
+    def generate_books_reco_excel(results_data, username, gstin, year, title):
         wb = Workbook()
         ws = wb.active
         ws.title = "Summary"
@@ -186,6 +186,14 @@ class ReconciliationExcelService:
         border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
         center_align = Alignment(horizontal='center', vertical='center')
         
+        # Handle if results_data is the full dict or just the summary list
+        if isinstance(results_data, dict):
+            results = results_data.get('summary', [])
+            all_results = results_data
+        else:
+            results = results_data
+            all_results = {}
+
         # Header Info
         ws.merge_cells('A1:Z1')
         ws['A1'] = f"{title} | Username: {username} | GSTIN: {gstin} | Year/FY: {year}"
@@ -222,7 +230,6 @@ class ReconciliationExcelService:
             cell.border = border
             
             # Sub-headers (Books, Portal, Diff)
-            # Find what the portal name should be (GSTR-1 or GSTR-3B)
             portal_label = "Portal"
             if "1vsbooks" in title.lower() or "GSTR1" in title: portal_label = "GSTR-1"
             elif "3bvsbooks" in title.lower() or "GSTR3B" in title: portal_label = "GSTR-3B"
@@ -263,6 +270,71 @@ class ReconciliationExcelService:
         ws.column_dimensions['A'].width = 35
         for i in range(2, col_idx):
             ws.column_dimensions[get_column_letter(i)].width = 15
+
+        # --- Detailed Sheets (if available) ---
+        sections = ["B2B", "B2CL", "B2CS", "EXP", "SEZ", "CDNR"]
+        header_map = {
+            "Taxable_BOOKS": "Books Taxable", "IGST_BOOKS": "Books IGST", "CGST_BOOKS": "Books CGST", "SGST_BOOKS": "Books SGST",
+            "Taxable_PORTAL": "Portal Taxable", "IGST_PORTAL": "Portal IGST", "CGST_PORTAL": "Portal CGST", "SGST_PORTAL": "Portal SGST",
+            "Taxable_DIFF": "Difference Taxable", "IGST_DIFF": "Difference IGST", "CGST_DIFF": "Difference CGST", "SGST_DIFF": "Difference SGST"
+        }
+
+        import pandas as pd
+        for section in sections:
+            records = all_results.get(section, [])
+            if records:
+                detail_ws = wb.create_sheet(title=f"Detailed_{section}")
+                df = pd.DataFrame(records)
+                
+                # Ensure specific columns come first
+                cols = list(df.columns)
+                priority = ["Year", "Month", "Status"]
+                ordered_cols = [c for c in priority if c in cols] + [c for c in cols if c not in priority]
+                df = df[ordered_cols]
+                
+                # Rename columns for display
+                display_cols = [header_map.get(c, c) for c in df.columns]
+                
+                # Header Style
+                for c_idx, col_name in enumerate(display_cols, 1):
+                    cell = detail_ws.cell(row=1, column=c_idx, value=col_name)
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.border = border
+                    cell.alignment = center_align
+                    
+                # Data and Formatting
+                for r_idx, row_values in enumerate(df.values, 2):
+                    for c_idx, value in enumerate(row_values, 1):
+                        col_name = df.columns[c_idx-1]
+                        
+                        # Standard cell writing
+                        cell = detail_ws.cell(row=r_idx, column=c_idx, value=value)
+                        cell.border = border
+                        
+                        # Type-specific formatting
+                        raw_col = col_name.lower()
+                        is_financial = any(x in raw_col for x in ["taxable", "igst", "cgst", "sgst", "diff"])
+                        
+                        if is_financial and isinstance(value, (int, float)):
+                            cell.number_format = '#,##0.00'
+                        elif "year" in raw_col or "month" in raw_col:
+                            cell.number_format = '0'
+                        elif "pos" in raw_col:
+                            cell.number_format = '@'
+
+                        # Highlight mismatches
+                        if (col_name == "Status" and value == "Mismatch") or \
+                           ("_DIFF" in col_name and isinstance(value, (int, float)) and abs(value) > 1.0):
+                            cell.fill = PatternFill(start_color="FFD9D9", end_color="FFD9D9", fill_type="solid")
+                        elif (col_name == "Status" and value == "Matched") or \
+                             ("_DIFF" in col_name and isinstance(value, (int, float)) and abs(value) <= 1.0):
+                            cell.fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+
+                # Auto-adjust column widths
+                for i, col in enumerate(display_cols, 1):
+                    max_length = max(len(str(col)), 10) + 4
+                    detail_ws.column_dimensions[get_column_letter(i)].width = max_length
 
         output = BytesIO()
         wb.save(output)

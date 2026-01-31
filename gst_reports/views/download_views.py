@@ -198,7 +198,7 @@ def download_reco_1vsbooks(request):
     """
     Download GSTR-1 vs Books reconciliation results as Excel.
     """
-    results = request.data.get('results', {}).get('summary', [])
+    results = request.data.get('results', {})
     username = request.data.get('username', '')
     gstin = request.data.get('gstin', '')
     year = request.data.get('year', '')
